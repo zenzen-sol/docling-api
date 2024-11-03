@@ -33,6 +33,7 @@ class BatchConversionJobResult(BaseModel):
     conversion_results: List[ConversationJobResult] = Field(
         default_factory=list, description="The results of the conversion job"
     )
-    status: Literal["IN_PROGRESS", "SUCCESS"] = Field(
+    status: Literal["IN_PROGRESS", "SUCCESS", "FAILURE"] = Field(
         None, description="The status of the entire conversion jobs in the batch"
     )
+    error: Optional[str] = Field(None, description="If the entire batch failed, this will be the error message")
