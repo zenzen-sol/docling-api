@@ -41,6 +41,7 @@ class DoclingDocumentConversion(DocumentConversionBase):
         images = []
         table_counter = 0
         picture_counter = 0
+        content_md = conv_res.document.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER)
 
         for element, _level in conv_res.document.iterate_items():
             if isinstance(element, (TableItem, PictureItem)) and element.image:
@@ -55,11 +56,11 @@ class DoclingDocumentConversion(DocumentConversionBase):
                     picture_counter += 1
                     image_name = f"picture-{picture_counter}.png"
                     image_type = "picture"
+                    content_md = content_md.replace("<!-- image -->", image_name, 1)
 
                 image_bytes = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
                 images.append(ImageData(type=image_type, filename=image_name, image=image_bytes))
 
-        content_md = conv_res.document.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER)
         return content_md, images
 
     def convert(
