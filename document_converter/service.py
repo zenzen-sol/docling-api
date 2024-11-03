@@ -35,13 +35,14 @@ class DoclingDocumentConversion(DocumentConversionBase):
         pipeline_options.generate_picture_images = True
         return pipeline_options
 
-    def _process_document_images(self, conv_res) -> Tuple[str, List[ImageData]]:
+    @staticmethod
+    def _process_document_images(conv_res) -> Tuple[str, List[ImageData]]:
         images = []
         table_counter = 0
         picture_counter = 0
 
         for element, _level in conv_res.document.iterate_items():
-            if isinstance(element, (TableItem, PictureItem)):
+            if isinstance(element, (TableItem, PictureItem)) and element.image:
                 img_buffer = BytesIO()
                 element.image.pil_image.save(img_buffer, format="PNG")
 
