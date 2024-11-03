@@ -1,33 +1,27 @@
-FROM python:3.10-slim
+# Use a base image with CUDA support and the desired Python version
+FROM python:3.12-slim-bookworm
 
-RUN apt-get update && apt-get install -y \
-    redis-server \
-    libgl1 \
-    libglib2.0-0 \
-    curl \
-    wget \
-    git \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -sSL https://install.python-poetry.org | python3 -
-
+ARG CPU_ONLY=false
 WORKDIR /app
 
-COPY pyproject.toml poetry.lock README.md ./
-COPY .env.example .env
+RUN apt-get update \
+    && apt-get install -y redis-server libgl1 libglib2.0-0 curl wget git procps \
+    && apt-get clean
 
-RUN poetry config virtualenvs.in-project true \
-    && if [ "$CPU_ONLY" = "true" ]; then \
-        poetry install --no-root --with cpu; \
+# Install Poetry
+RUN pip install poetry
+
+COPY pyproject.toml poetry.lock ./
+
+RUN if [ "$CPU_ONLY" = "true" ]; then \
+    pip install --no-cache-dir torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu; \
     else \
-        poetry install --no-root; \
+    pip install --no-cache-dir torch torchvision; \
     fi
 
 ENV HF_HOME=/tmp/ \
     TORCH_HOME=/tmp/ \
     OMP_NUM_THREADS=4
-
-RUN poetry run python -c 'from docling.document_converter import DocumentConverter; artifacts_path = DocumentConverter.download_models_hf(force=True);'
 
 COPY . .
 
