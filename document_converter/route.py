@@ -6,7 +6,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, Query
 from document_converter.schema import BatchConversionJobResult, ConversationJobResult, ConversionResult
 from document_converter.service import DocumentConverterService, DoclingDocumentConversion
 from document_converter.utils import is_file_format_supported
-from worker.tasks import convert_document_task
+from worker.tasks import convert_document_task, convert_documents_task
 
 router = APIRouter()
 
@@ -108,7 +108,21 @@ async def create_batch_conversion_job(
     extract_tables_as_images: bool = False,
     image_resolution_scale: int = Query(4, ge=1, le=4),
 ):
-    pass
+    """Create a batch conversion job for multiple documents."""
+    doc_data = []
+    for document in documents:
+        file_bytes = await document.read()
+        if not is_file_format_supported(file_bytes, document.filename):
+            raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+        doc_data.append((document.filename, file_bytes))
+
+    task = convert_documents_task.delay(
+        doc_data,
+        extract_tables=extract_tables_as_images,
+        image_resolution_scale=image_resolution_scale,
+    )
+
+    return BatchConversionJobResult(job_id=task.id, status="IN_PROGRESS")
 
 
 @router.get(
@@ -118,4 +132,5 @@ async def create_batch_conversion_job(
     description="Get the status of a batch conversion job",
 )
 async def get_batch_conversion_job_status(job_id: str):
-    pass
+    """Get the status and results of a batch conversion job."""
+    return document_converter_service.get_batch_conversion_task_result(job_id)

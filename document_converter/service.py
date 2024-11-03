@@ -122,6 +122,7 @@ class DocumentConverterService:
     def convert_document(self, document: Tuple[str, BytesIO], **kwargs) -> ConversionResult:
         result = self.document_converter.convert(document, **kwargs)
         if result.error:
+            logging.error(f"Failed to convert {document[0]}: {result.error}")
             raise HTTPException(status_code=500, detail=result.error)
         return result
 
@@ -169,4 +170,32 @@ class DocumentConverterService:
             return ConversationJobResult(job_id=job_id, status="FAILURE", error=str(task.result))
 
     def get_batch_conversion_task_result(self, job_id: str) -> BatchConversionJobResult:
-        pass
+        """Get the status and results of a batch conversion job.
+
+        Returns:
+        - IN_PROGRESS: When task is still running
+        - SUCCESS: A batch is successful as long as the task is successful
+        - FAILURE: When the task fails for any reason
+        """
+
+        task = AsyncResult(job_id)
+        if task.state == 'PENDING':
+            return BatchConversionJobResult(job_id=job_id, status="IN_PROGRESS")
+
+        # Task completed successfully, but need to check individual conversion results
+        if task.state == 'SUCCESS':
+            conversion_results = task.get()
+            job_results = []
+
+            for result in conversion_results:
+                if result.get('error'):
+                    job_result = ConversationJobResult(status="FAILURE", error=result['error'])
+                else:
+                    job_result = ConversationJobResult(
+                        status="SUCCESS", result=ConversionResult(**result).model_dump(exclude_unset=True)
+                    )
+                job_results.append(job_result)
+
+            return BatchConversionJobResult(job_id=job_id, status="SUCCESS", conversion_results=job_results)
+
+        return BatchConversionJobResult(job_id=job_id, status="FAILURE", error=str(task.result))
