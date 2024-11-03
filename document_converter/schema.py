@@ -5,7 +5,7 @@ from typing import List, Literal, Optional
 class ImageData(BaseModel):
     type: Optional[Literal["table", "picture"]] = Field(None, description="The type of the image")
     filename: Optional[str] = Field(None, description="The filename of the image")
-    image: Optional[bytes] = Field(None, description="The image data")
+    image: Optional[str] = Field(None, description="The image data")
 
 
 class ConversionResult(BaseModel):

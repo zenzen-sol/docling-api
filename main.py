@@ -1,13 +1,18 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from document_converter.route import router as document_converter_router
 
 app = FastAPI()
 
 
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
 
 
-@app.get("/hello/{name}")
-async def say_hello(name: str):
-    return {"message": f"Hello {name}"}
+app.include_router(document_converter_router, prefix="", tags=["document-converter"])

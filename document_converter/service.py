@@ -7,8 +7,10 @@ from docling.datamodel.base_models import InputFormat, DocumentStream
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import PdfFormatOption, DocumentConverter
 from docling_core.types.doc import ImageRefMode, TableItem, PictureItem
+from fastapi import HTTPException
 
 from document_converter.schema import ConversionResult, ImageData
+import base64
 
 logging.basicConfig(level=logging.INFO)
 IMAGE_RESOLUTION_SCALE = 4
@@ -52,7 +54,8 @@ class DoclingDocumentConversion(DocumentConversionBase):
                     image_name = f"picture-{picture_counter}.png"
                     image_type = "picture"
 
-                images.append(ImageData(type=image_type, filename=image_name, image=img_buffer.getvalue()))
+                image_bytes = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+                images.append(ImageData(type=image_type, filename=image_name, image=image_bytes))
 
         content_md = conv_res.document.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER)
         return content_md, images
@@ -114,8 +117,12 @@ class DocumentConverterService:
     def __init__(self, document_converter: DocumentConversionBase):
         self.document_converter = document_converter
 
-    def convert_document(self, document: Tuple[str, BytesIO]) -> ConversionResult:
-        return self.document_converter.convert(document)
+    def convert_document(self, document: Tuple[str, BytesIO], **kwargs) -> ConversionResult:
+        result = self.document_converter.convert(document, **kwargs)
+        print("Result ===>  ", result)
+        if result.error:
+            raise HTTPException(status_code=500, detail=result.error)
+        return result
 
-    def convert_documents(self, documents: List[Tuple[str, BytesIO]]) -> List[ConversionResult]:
-        return self.document_converter.convert_batch(documents)
+    def convert_documents(self, documents: List[Tuple[str, BytesIO]], **kwargs) -> List[ConversionResult]:
+        return self.document_converter.convert_batch(documents, **kwargs)

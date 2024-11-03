@@ -1965,6 +1965,17 @@ files = [
 cli = ["click (>=5.0)"]
 
 [[package]]
+name = "python-multipart"
+version = "0.0.17"
+description = "A streaming multipart parser for Python"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "python_multipart-0.0.17-py3-none-any.whl", hash = "sha256:15dc4f487e0a9476cc1201261188ee0940165cffc94429b6fc565c4d3045cb5d"},
+    {file = "python_multipart-0.0.17.tar.gz", hash = "sha256:41330d831cae6e2f22902704ead2826ea038d0419530eadff3ea80175aec5538"},
+]
+
+[[package]]
 name = "python-pptx"
 version = "1.0.2"
 description = "Create, read, and update PowerPoint 2007+ (.pptx) files."
@@ -2772,4 +2783,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "c99173aa9cbb4b35280668d8a2ff0e8cee5ed55ae5a5860317ef2d7045cba114"
+content-hash = "2837f68b0aa6399198fc526eda45c40bc7b540162093e15e9ee4d5ba617668f8"
