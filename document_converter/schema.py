@@ -22,7 +22,7 @@ class BatchConversionResult(BaseModel):
 
 
 class ConversationJobResult(BaseModel):
-    job_id: str = Field(..., description="The id of the conversion job")
+    job_id: Optional[str] = Field(None, description="The id of the conversion job")
     result: Optional[ConversionResult] = Field(None, description="The result of the conversion job")
     error: Optional[str] = Field(None, description="The error that occurred during the conversion job")
     status: Literal["IN_PROGRESS", "SUCCESS", "FAILURE"] = Field(None, description="The status of the conversion job")

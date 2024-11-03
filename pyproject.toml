@@ -11,6 +11,9 @@ fastapi = "^0.115.4"
 uvicorn = "^0.32.0"
 docling = "^2.3.1"
 python-multipart = "^0.0.17"
+celery = "^5.4.0"
+flower = "^2.0.1"
+redis = "^5.2.0"
 
 
 [build-system]

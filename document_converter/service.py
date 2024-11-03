@@ -126,3 +126,17 @@ class DocumentConverterService:
 
     def convert_documents(self, documents: List[Tuple[str, BytesIO]], **kwargs) -> List[ConversionResult]:
         return self.document_converter.convert_batch(documents, **kwargs)
+
+    def convert_document_task(
+        self,
+        document: Tuple[str, BytesIO],
+        **kwargs,
+    ) -> ConversionResult:
+        return self.convert_document(document, **kwargs)
+
+    def convert_documents_task(
+        self,
+        documents: List[Tuple[str, BytesIO]],
+        **kwargs,
+    ) -> List[ConversionResult]:
+        return self.convert_documents(documents, **kwargs)
