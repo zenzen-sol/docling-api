@@ -119,7 +119,6 @@ class DocumentConverterService:
 
     def convert_document(self, document: Tuple[str, BytesIO], **kwargs) -> ConversionResult:
         result = self.document_converter.convert(document, **kwargs)
-        print("Result ===>  ", result)
         if result.error:
             raise HTTPException(status_code=500, detail=result.error)
         return result

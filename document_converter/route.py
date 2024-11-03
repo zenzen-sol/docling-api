@@ -1,9 +1,10 @@
 from io import BytesIO
 from typing import List
-from fastapi import APIRouter, File, UploadFile, Query
+from fastapi import APIRouter, File, HTTPException, UploadFile, Query
 
 from document_converter.schema import ConversionResult
 from document_converter.service import DocumentConverterService, DoclingDocumentConversion
+from document_converter.utils import guess_format, is_file_format_supported
 
 router = APIRouter()
 
@@ -19,6 +20,9 @@ async def convert_document(
     image_resolution_scale: int = Query(4, ge=1, le=4),
 ):
     file_bytes = await document.read()
+    if not is_file_format_supported(file_bytes, document.filename):
+        raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+
     return document_converter_service.convert_document(
         (document.filename, BytesIO(file_bytes)),
         extract_tables=extract_tables_as_images,
@@ -32,6 +36,11 @@ async def convert_documents(
     extract_tables_as_images: bool = False,
     image_resolution_scale: int = Query(4, ge=1, le=4),
 ):
+    for document in documents:
+        file_bytes = await document.read()
+        if not is_file_format_supported(file_bytes, document.filename):
+            raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+
     return document_converter_service.convert_documents(
         [(document.filename, BytesIO(await document.read())) for document in documents],
         extract_tables=extract_tables_as_images,
