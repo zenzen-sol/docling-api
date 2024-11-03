@@ -36,13 +36,15 @@ async def convert_documents(
     extract_tables_as_images: bool = False,
     image_resolution_scale: int = Query(4, ge=1, le=4),
 ):
+    doc_streams = []
     for document in documents:
         file_bytes = await document.read()
         if not is_file_format_supported(file_bytes, document.filename):
             raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+        doc_streams.append((document.filename, BytesIO(file_bytes)))
 
     return document_converter_service.convert_documents(
-        [(document.filename, BytesIO(await document.read())) for document in documents],
+        doc_streams,
         extract_tables=extract_tables_as_images,
         image_resolution_scale=image_resolution_scale,
     )
