@@ -51,19 +51,23 @@ class DoclingDocumentConversion(DocumentConversionBase):
         table_counter = 0
         picture_counter = 0
         for element, _level in conv_res.document.iterate_items():
-            if isinstance(element, TableItem) and extract_tables:
-                table_counter += 1
-                img_buffer = BytesIO()
-                element.image.pil_image.save(img_buffer, format="PNG")
-                image_name = f"table-{table_counter}.png"
-                images.append(ImageData(type="table", filename=image_name, image=img_buffer.getvalue()))
+            try:
+                if isinstance(element, TableItem):
+                    table_counter += 1
+                    img_buffer = BytesIO()
+                    element.image.pil_image.save(img_buffer, format="PNG")
+                    image_name = f"table-{table_counter}.png"
+                    images.append(ImageData(type="table", filename=image_name, image=img_buffer.getvalue()))
 
-            if isinstance(element, PictureItem):
-                picture_counter += 1
-                img_buffer = BytesIO()
-                element.image.pil_image.save(img_buffer, format="PNG")
-                image_name = f"picture-{picture_counter}.png"
-                images.append(ImageData(type="picture", filename=image_name, image=img_buffer.getvalue()))
+                if isinstance(element, PictureItem):
+                    picture_counter += 1
+                    img_buffer = BytesIO()
+                    element.image.pil_image.save(img_buffer, format="PNG")
+                    image_name = f"picture-{picture_counter}.png"
+                    images.append(ImageData(type="picture", filename=image_name, image=img_buffer.getvalue()))
+            except Exception as e:
+                logging.warning(f"Failed to process image in {filename}: {str(e)}")
+                continue
 
         # Generate markdown with embedded pictures
         content_md = conv_res.document.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER)
