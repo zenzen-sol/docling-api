@@ -79,7 +79,7 @@ async def create_single_document_conversion_job(
         raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
 
     task = convert_document_task.delay(
-        (document.filename, BytesIO(file_bytes)),
+        (document.filename, file_bytes),
         extract_tables=extract_tables_as_images,
         image_resolution_scale=image_resolution_scale,
     )
@@ -91,6 +91,7 @@ async def create_single_document_conversion_job(
     '/conversion-jobs/{job_id}',
     response_model=ConversationJobResult,
     description="Get the status of a single document conversion job",
+    response_model_exclude_unset=True,
 )
 async def get_conversion_job_status(job_id: str):
     return document_converter_service.get_single_document_task_result(job_id)

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from io import BytesIO
 import logging
-from multiprocessing.pool import AsyncResult
+from celery.result import AsyncResult
 from typing import List, Tuple
 
 from docling.datamodel.base_models import InputFormat, DocumentStream
@@ -130,16 +130,18 @@ class DocumentConverterService:
 
     def convert_document_task(
         self,
-        document: Tuple[str, BytesIO],
+        document: Tuple[str, bytes],
         **kwargs,
     ) -> ConversionResult:
+        document = (document[0], BytesIO(document[1]))
         return self.document_converter.convert(document, **kwargs)
 
     def convert_documents_task(
         self,
-        documents: List[Tuple[str, BytesIO]],
+        documents: List[Tuple[str, bytes]],
         **kwargs,
     ) -> List[ConversionResult]:
+        documents = [(filename, BytesIO(file)) for filename, file in documents]
         return self.document_converter.convert_batch(documents, **kwargs)
 
     def get_single_document_task_result(self, job_id: str) -> ConversationJobResult:
@@ -161,9 +163,7 @@ class DocumentConverterService:
             if result.get('error'):
                 return ConversationJobResult(job_id=job_id, status="FAILURE", error=result['error'])
 
-            return ConversationJobResult(
-                job_id=job_id, status="SUCCESS", result=ConversionResult(**result).model_dump(exclude_unset=True)
-            )
+            return ConversationJobResult(job_id=job_id, status="SUCCESS", result=ConversionResult(**result))
 
         else:
             return ConversationJobResult(job_id=job_id, status="FAILURE", error=str(task.result))
