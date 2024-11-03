@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from io import BytesIO
 import logging
+from multiprocessing.pool import AsyncResult
 from typing import List, Tuple
 
 from docling.datamodel.base_models import InputFormat, DocumentStream
@@ -9,7 +10,7 @@ from docling.document_converter import PdfFormatOption, DocumentConverter
 from docling_core.types.doc import ImageRefMode, TableItem, PictureItem
 from fastapi import HTTPException
 
-from document_converter.schema import ConversionResult, ImageData
+from document_converter.schema import BatchConversionJobResult, ConversationJobResult, ConversionResult, ImageData
 import base64
 
 logging.basicConfig(level=logging.INFO)
@@ -132,11 +133,40 @@ class DocumentConverterService:
         document: Tuple[str, BytesIO],
         **kwargs,
     ) -> ConversionResult:
-        return self.convert_document(document, **kwargs)
+        return self.document_converter.convert(document, **kwargs)
 
     def convert_documents_task(
         self,
         documents: List[Tuple[str, BytesIO]],
         **kwargs,
     ) -> List[ConversionResult]:
-        return self.convert_documents(documents, **kwargs)
+        return self.document_converter.convert_batch(documents, **kwargs)
+
+    def get_single_document_task_result(self, job_id: str) -> ConversationJobResult:
+        """Get the status and result of a document conversion job.
+
+        Returns:
+        - IN_PROGRESS: When task is still running
+        - SUCCESS: When conversion completed successfully
+        - FAILURE: When task failed or conversion had errors
+        """
+
+        task = AsyncResult(job_id)
+        if task.state == 'PENDING':
+            return ConversationJobResult(job_id=job_id, status="IN_PROGRESS")
+
+        elif task.state == 'SUCCESS':
+            result = task.get()
+            # Check if the conversion result contains an error
+            if result.get('error'):
+                return ConversationJobResult(job_id=job_id, status="FAILURE", error=result['error'])
+
+            return ConversationJobResult(
+                job_id=job_id, status="SUCCESS", result=ConversionResult(**result).model_dump(exclude_unset=True)
+            )
+
+        else:
+            return ConversationJobResult(job_id=job_id, status="FAILURE", error=str(task.result))
+
+    def get_batch_conversion_task_result(self, job_id: str) -> BatchConversionJobResult:
+        pass

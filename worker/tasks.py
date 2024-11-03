@@ -1,7 +1,7 @@
 from io import BytesIO
 from typing import Any, Dict, List, Tuple
 from document_converter.service import IMAGE_RESOLUTION_SCALE, DoclingDocumentConversion, DocumentConverterService
-from worker import celery_app
+from worker.celery_app import celery_app
 
 
 @celery_app.task(name="celery.ping")
@@ -18,7 +18,9 @@ def convert_document_task(
     image_resolution_scale: int = IMAGE_RESOLUTION_SCALE,
 ) -> Dict[str, Any]:
     document_service = DocumentConverterService(document_converter=DoclingDocumentConversion())
-    result = document_service.convert_document_task(document, extract_tables, image_resolution_scale)
+    result = document_service.convert_document_task(
+        document, extract_tables=extract_tables, image_resolution_scale=image_resolution_scale
+    )
     return result.model_dump(exclude_unset=True)
 
 
@@ -28,11 +30,9 @@ def convert_documents_task(
     documents: List[Tuple[str, BytesIO]],
     extract_tables: bool = False,
     image_resolution_scale: int = IMAGE_RESOLUTION_SCALE,
-) -> Dict[str, Any]:
+) -> List[Dict[str, Any]]:
     document_service = DocumentConverterService(document_converter=DoclingDocumentConversion())
-    result = document_service.convert_documents_task(
-        documents,
-        extract_tables,
-        image_resolution_scale,
+    results = document_service.convert_documents_task(
+        documents, extract_tables=extract_tables, image_resolution_scale=image_resolution_scale
     )
-    return result.model_dump(exclude_unset=True)
+    return [result.model_dump(exclude_unset=True) for result in results]

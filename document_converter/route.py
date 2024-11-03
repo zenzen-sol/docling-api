@@ -1,10 +1,12 @@
 from io import BytesIO
+from multiprocessing.pool import AsyncResult
 from typing import List
 from fastapi import APIRouter, File, HTTPException, UploadFile, Query
 
 from document_converter.schema import BatchConversionJobResult, ConversationJobResult, ConversionResult
 from document_converter.service import DocumentConverterService, DoclingDocumentConversion
-from document_converter.utils import guess_format, is_file_format_supported
+from document_converter.utils import is_file_format_supported
+from worker.tasks import convert_document_task
 
 router = APIRouter()
 
@@ -65,7 +67,6 @@ async def convert_multiple_documents(
 @router.post(
     '/conversion-jobs',
     response_model=ConversationJobResult,
-    response_model_exclude_unset=True,
     description="Create a conversion job for a single document",
 )
 async def create_single_document_conversion_job(
@@ -73,17 +74,26 @@ async def create_single_document_conversion_job(
     extract_tables_as_images: bool = False,
     image_resolution_scale: int = Query(4, ge=1, le=4),
 ):
-    pass
+    file_bytes = await document.read()
+    if not is_file_format_supported(file_bytes, document.filename):
+        raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+
+    task = convert_document_task.delay(
+        (document.filename, BytesIO(file_bytes)),
+        extract_tables=extract_tables_as_images,
+        image_resolution_scale=image_resolution_scale,
+    )
+
+    return ConversationJobResult(job_id=task.id, status="IN_PROGRESS")
 
 
 @router.get(
     '/conversion-jobs/{job_id}',
     response_model=ConversationJobResult,
-    response_model_exclude_unset=True,
     description="Get the status of a single document conversion job",
 )
 async def get_conversion_job_status(job_id: str):
-    pass
+    return document_converter_service.get_single_document_task_result(job_id)
 
 
 @router.post(
