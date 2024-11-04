@@ -8,11 +8,16 @@ RUN apt-get update \
     && apt-get install -y redis-server libgl1 libglib2.0-0 curl wget git procps \
     && apt-get clean
 
-# Install Poetry
-RUN pip install poetry
+# Install Poetry and configure it
+RUN pip install poetry \
+    && poetry config virtualenvs.create false
 
 COPY pyproject.toml poetry.lock ./
 
+# Install dependencies before torch
+RUN poetry install --no-interaction --no-root
+
+# Install PyTorch separately based on CPU_ONLY flag
 RUN if [ "$CPU_ONLY" = "true" ]; then \
     pip install --no-cache-dir torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu; \
     else \
