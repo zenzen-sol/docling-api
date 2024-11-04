@@ -21,7 +21,7 @@ RUN poetry install --no-interaction --no-root
 RUN if [ "$CPU_ONLY" = "true" ]; then \
     pip install --no-cache-dir torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu; \
     else \
-    pip install --no-cache-dir torch torchvision; \
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121; \
     fi
 
 ENV HF_HOME=/tmp/ \
