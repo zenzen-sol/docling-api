@@ -28,6 +28,8 @@ ENV HF_HOME=/tmp/ \
     TORCH_HOME=/tmp/ \
     OMP_NUM_THREADS=4
 
+RUN python -c 'from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline; artifacts_path = StandardPdfPipeline.download_models_hf(force=True);'
+
 COPY . .
 
 EXPOSE 8080
