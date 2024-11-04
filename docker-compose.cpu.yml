@@ -10,9 +10,11 @@ services:
     command: poetry run celery -A worker.celery_config worker --pool=solo -n worker_primary --loglevel=info
     volumes:
       - .:/app
+      - model_cache:/tmp
     environment:
       - REDIS_HOST=${REDIS_HOST}
       - ENV=production
+    restart: on-failure
     depends_on:
       - redis
 
@@ -27,13 +29,17 @@ services:
     environment:
       - REDIS_HOST=${REDIS_HOST}
       - ENV=production
+      - MALLOC_ARENA_MAX=2
+      - OMP_NUM_THREADS=2
+      - PYTHONMALLOC=malloc
     ports:
       - "8080:8080"
     volumes:
       - .:/app
+      - model_cache:/tmp
+    restart: on-failure
     depends_on:
       - redis
-      - celery_worker
 
   redis:
     container_name: redis
@@ -53,6 +59,7 @@ services:
       - "5556:5555"
     volumes:
       - .:/app
+      - model_cache:/tmp
     environment:
       - REDIS_HOST=${REDIS_HOST}
       - ENV=production
@@ -60,3 +67,6 @@ services:
       - app
       - redis
       - celery_worker
+
+volumes:
+  model_cache:
