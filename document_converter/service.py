@@ -1,17 +1,17 @@
+import base64
+import logging
 from abc import ABC, abstractmethod
 from io import BytesIO
-import logging
-from celery.result import AsyncResult
 from typing import List, Tuple
 
+from celery.result import AsyncResult
 from docling.datamodel.base_models import InputFormat, DocumentStream
-from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions
 from docling.document_converter import PdfFormatOption, DocumentConverter
 from docling_core.types.doc import ImageRefMode, TableItem, PictureItem
 from fastapi import HTTPException
 
 from document_converter.schema import BatchConversionJobResult, ConversationJobResult, ConversionResult, ImageData
-import base64
 
 logging.basicConfig(level=logging.INFO)
 IMAGE_RESOLUTION_SCALE = 4
@@ -34,6 +34,8 @@ class DoclingDocumentConversion(DocumentConversionBase):
         pipeline_options.generate_page_images = False
         pipeline_options.generate_table_images = extract_tables
         pipeline_options.generate_picture_images = True
+        pipeline_options.ocr_options = EasyOcrOptions(lang=["fr", "de", "es", "en", "it", "ja", "pt", "ru", "ar"])
+
         return pipeline_options
 
     @staticmethod
