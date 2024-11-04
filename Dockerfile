@@ -32,14 +32,7 @@ RUN python -c 'from docling.pipeline.standard_pdf_pipeline import StandardPdfPip
 
 # Pre-download EasyOCR models in compatible groups
 RUN python -c 'import easyocr; \
-    # Latin languages
     reader = easyocr.Reader(["fr", "de", "es", "en", "it", "pt"], gpu=True); \
-    # Japanese
-    reader = easyocr.Reader(["ja", "en"], gpu=True); \
-    # Russian
-    reader = easyocr.Reader(["ru", "en"], gpu=True); \
-    # Arabic
-    reader = easyocr.Reader(["ar", "en"], gpu=True); \
     print("EasyOCR models downloaded successfully")'
 
 COPY . .

@@ -34,7 +34,7 @@ class DoclingDocumentConversion(DocumentConversionBase):
         pipeline_options.generate_page_images = False
         pipeline_options.generate_table_images = extract_tables
         pipeline_options.generate_picture_images = True
-        pipeline_options.ocr_options = EasyOcrOptions(lang=["fr", "de", "es", "en", "it", "ja", "pt", "ru", "ar"])
+        pipeline_options.ocr_options = EasyOcrOptions(lang=["fr", "de", "es", "en", "it", "pt"])
 
         return pipeline_options
 
