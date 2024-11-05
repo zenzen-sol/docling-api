@@ -119,7 +119,7 @@ curl -X POST "http://localhost:8080/documents/convert" \
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/drmingler/docling-api.git
 cd document-converter
 ```
 
