@@ -3,6 +3,12 @@
 > [!IMPORTANT]
 > This backend server is a robust, scalable solution for effortlessly converting a wide range of document formats—including PDF, DOCX, PPTX, HTML, JPG, PNG, TIFF, BMP, AsciiDoc, and Markdown—into Markdown. Powered by [Docling](https://github.com/DS4SD/docling) (IBM's advanced document parser), this service is built with FastAPI, Celery, and Redis, ensuring fast, efficient processing. Optimized for both CPU and GPU modes, with GPU highly recommended for production environments, this solution offers high performance and flexibility, making it ideal for handling complex document processing at scale.
 
+## Comparison to Other Parsing Libraries
+
+| Original PDF | Docling-API | Marker-API | PyPDF | PyMuPDF4LLM |
+|--------------|------------|------------|-------|-------------|
+| ![Original PDF](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/original.png) | ![Docling](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/docling.png) | ![Marker-API](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/marker.png) | ![PyPDF](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/pypdf.png) | ![PyMuPDF4LLM](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/pymupdf.png) |
+
 ## Features
 - **Multiple Format Support**: Converts various document types including:
   - PDF files
