@@ -1,9 +1,7 @@
-# Document Converter Service
-
-A high-performance document conversion service that transforms various document formats into Markdown. Built with FastAPI, Celery, and Redis, supporting both CPU and GPU processing modes.
+# Documents to Markdown Converter Server
+This is a lightweight and highly scalable backend server powered by (docling a state-of-the-art document to markdown converter) that transforms various document (PDF, DOCX, PPTX, HTML, JPG, PNG, TIFF, BMP, AsciiDoc and Markdown) formats into Markdown. Built with FastAPI, Celery, and Redis, supporting both CPU and GPU (recommended for production) processing modes.
 
 ## Features
-
 - **Multiple Format Support**: Converts various document types including:
   - PDF files
   - Microsoft Word documents (DOCX)
@@ -15,9 +13,9 @@ A high-performance document conversion service that transforms various document 
 
 - **Conversion Capabilities**:
   - Text extraction and formatting
-  - Table detection and conversion
+  - Table detection, extraction and conversion
   - Image extraction and processing
-  - Multi-language OCR support (French, German, Spanish, English, Italian, Portuguese)
+  - Multi-language OCR support (French, German, Spanish, English, Italian, Portuguese etc)
   - Configurable image resolution scaling
 
 - **API Endpoints**:
@@ -33,12 +31,14 @@ A high-performance document conversion service that transforms various document 
   - Task monitoring through Flower dashboard
 
 ## Prerequisites
-
 - Docker and Docker Compose
-- NVIDIA GPU with CUDA support (for GPU mode)
-- NVIDIA Container Toolkit (for GPU mode)
+- NVIDIA GPU with CUDA support (for GPU mode, this is not needed for cpu)
+- NVIDIA Container Toolkit (for GPU mode, this is not needed for cpu)
 
-## Environment Setup
+## Environment Setup (Running Locally)
+
+
+## Environment Setup (Running in Docker)
 
 1. Clone the repository:
 ```bash
@@ -52,17 +52,19 @@ REDIS_HOST=redis://redis:6379/0
 ENV=production
 ```
 
-3. Start the service using CPU-only processing:
+### CPU Mode
+Start the service using CPU-only processing:
+To scale up Celery workers, you can use the --scale option and pass the number of workers you want to use. in this case it will spawn 1 workers
 ```bash
-docker-compose -f docker-compose.cpu.yml up --build
+docker-compose -f docker-compose.cpu.yml up --build --scale celery_worker=1
 ```
 
-### GPU Mode
-
-Start the service with GPU acceleration:
-
+### GPU Mode (Recommend for production)
+This is the preferred format for production as it is way faster.
+To start the service with GPU acceleration:
+To scale up Celery workers, you can use the --scale option and pass the number of workers you want to use. in this case it will spawn 3 workers
 ```bash
-docker-compose -f docker-compose.gpu.yml up --build
+docker-compose -f docker-compose.gpu.yml up --build --scale celery_worker=3
 ```
 
 ## Service Components
@@ -71,9 +73,7 @@ The service will start the following components:
 
 - **API Server**: http://localhost:8080
 - **Redis**: http://localhost:6379
-- **Flower Dashboard**:
-  - CPU mode: http://localhost:5556
-  - GPU mode: http://localhost:5555
+- **Flower Dashboard**: http://localhost:5556
 
 ## API Usage
 
@@ -140,6 +140,7 @@ The service uses a distributed architecture with the following components:
 2. Celery workers for distributed task processing
 3. Redis as message broker and result backend
 4. Flower for task monitoring and management
+5. Docling for the file conversion
 
 ## Performance Considerations
 
