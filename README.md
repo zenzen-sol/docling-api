@@ -5,9 +5,17 @@
 
 ## Comparison to Other Parsing Libraries
 
-| Original PDF | Docling-API | Marker-API | PyPDF | PyMuPDF4LLM |
-|--------------|------------|------------|-------|-------------|
-| ![Original PDF](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/original.png) | ![Docling](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/docling.png) | ![Marker-API](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/marker.png) | ![PyPDF](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/pypdf.png) | ![PyMuPDF4LLM](https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/pymupdf.png) |
+| Original PDF |
+|--------------|
+| <img src="https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/original.png" width="500"/> |
+
+| Docling-API | Marker |
+|-------------|--------|
+| <img src="https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/docling.png" width="500"/> | <img src="https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/marker.png" width="500"/> |
+
+| PyPDF | PyMuPDF4LLM |
+|-------|-------------|
+| <img src="https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/pypdf.png" width="500"/> | <img src="https://raw.githubusercontent.com/drmingler/docling-api/refs/heads/main/images/pymupdf.png" width="500"/> |
 
 ## Features
 - **Multiple Format Support**: Converts various document types including:
