@@ -1,5 +1,7 @@
 # Documents to Markdown Converter Server
-This is a lightweight and highly scalable backend server powered by (docling a state-of-the-art document to markdown converter) that transforms various document (PDF, DOCX, PPTX, HTML, JPG, PNG, TIFF, BMP, AsciiDoc and Markdown) formats into Markdown. Built with FastAPI, Celery, and Redis, supporting both CPU and GPU (recommended for production) processing modes.
+
+> [!IMPORTANT]
+> This backend server is a robust, scalable solution for effortlessly converting a wide range of document formats—including PDF, DOCX, PPTX, HTML, JPG, PNG, TIFF, BMP, AsciiDoc, and Markdown—into Markdown. Powered by [Docling](https://github.com/DS4SD/docling) (IBM's advanced document parser), this service is built with FastAPI, Celery, and Redis, ensuring fast, efficient processing. Optimized for both CPU and GPU modes, with GPU highly recommended for production environments, this solution offers high performance and flexibility, making it ideal for handling complex document processing at scale.
 
 ## Features
 - **Multiple Format Support**: Converts various document types including:
@@ -30,13 +32,88 @@ This is a lightweight and highly scalable backend server powered by (docling a s
   - Distributed task processing using Celery
   - Task monitoring through Flower dashboard
 
-## Prerequisites
-- Docker and Docker Compose
-- NVIDIA GPU with CUDA support (for GPU mode, this is not needed for cpu)
-- NVIDIA Container Toolkit (for GPU mode, this is not needed for cpu)
-
 ## Environment Setup (Running Locally)
 
+### Prerequisites
+- Python 3.8 or higher
+- Poetry (Python package manager)
+- Redis server (for task queue)
+
+### 1. Install Poetry (if not already installed)
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+```
+
+### 2. Clone and Setup Project
+```bash
+git clone <repository-url>
+cd document-converter
+poetry install
+```
+
+### 3. Configure Environment
+Create a `.env` file in the project root:
+```bash
+REDIS_HOST=redis://localhost:6379/0
+ENV=development
+```
+
+### 4. Start Redis Server
+Start Redis locally (install if not already installed):
+
+#### For MacOS:
+```bash
+brew install redis
+brew services start redis
+```
+
+#### For Ubuntu/Debian:
+```bash
+sudo apt-get install redis-server
+sudo service redis-server start
+```
+
+### 5. Start the Application Components
+
+1. Start the FastAPI server:
+```bash
+poetry run uvicorn main:app --reload --port 8080
+```
+
+2. Start Celery worker (in a new terminal):
+```bash
+poetry run celery -A worker.celery_config worker --pool=solo -n worker_primary --loglevel=info
+```
+
+3. Start Flower dashboard for monitoring (optional, in a new terminal):
+```bash
+poetry run celery -A worker.celery_config flower --port=5555
+```
+
+### 6. Verify Installation
+
+1. Check if the API server is running:
+```bash
+curl http://localhost:8080/docs
+```
+
+2. Test Celery worker:
+```bash
+curl -X POST "http://localhost:8080/documents/convert" \
+  -H "accept: application/json" \
+  -H "Content-Type: multipart/form-data" \
+  -F "document=@/path/to/test.pdf"
+```
+
+3. Access monitoring dashboard:
+- Open http://localhost:5555 in your browser to view the Flower dashboard
+
+### Development Notes
+
+- The API documentation is available at http://localhost:8080/docs
+- Redis is used as both message broker and result backend for Celery tasks
+- The service supports both synchronous and asynchronous document conversion
+- For development, the server runs with auto-reload enabled
 
 ## Environment Setup (Running in Docker)
 
@@ -53,16 +130,13 @@ ENV=production
 ```
 
 ### CPU Mode
-Start the service using CPU-only processing:
-To scale up Celery workers, you can use the --scale option and pass the number of workers you want to use. in this case it will spawn 1 workers
+To start the service using CPU-only processing, use the following command. You can adjust the number of Celery workers by specifying the --scale option. In this example, 1 worker will be created:
 ```bash
 docker-compose -f docker-compose.cpu.yml up --build --scale celery_worker=1
 ```
 
 ### GPU Mode (Recommend for production)
-This is the preferred format for production as it is way faster.
-To start the service with GPU acceleration:
-To scale up Celery workers, you can use the --scale option and pass the number of workers you want to use. in this case it will spawn 3 workers
+For production, it is recommended to enable GPU acceleration, as it significantly improves performance. Use the command below to start the service with GPU support. You can also scale the number of Celery workers using the --scale option; here, 3 workers will be launched:
 ```bash
 docker-compose -f docker-compose.gpu.yml up --build --scale celery_worker=3
 ```
@@ -149,8 +223,10 @@ The service uses a distributed architecture with the following components:
 - Multiple workers can be scaled horizontally for increased throughput
 
 ## License
+The codebase is under MIT license. See LICENSE for more information
 
-[Your License Here]
-```
-
-This README provides a comprehensive overview of your document conversion service, including setup instructions, features, and usage examples. The code references show that the service supports both synchronous and asynchronous processing modes, with endpoints for single and batch document conversion.
+## Acknowledgements
+- [Docling](https://github.com/DS4SD/docling) the state-of-the-art document conversion library by IBM
+- [FastAPI](https://fastapi.tiangolo.com/) the web framework
+- [Celery](https://docs.celeryq.dev/en/stable/) for distributed task processing
+- [Flower](https://flower.readthedocs.io/en/latest/) for monitoring and management
