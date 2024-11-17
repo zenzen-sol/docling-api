@@ -1,9 +1,11 @@
 from io import BytesIO
 from multiprocessing.pool import AsyncResult
-from typing import List
+from typing import List, AsyncGenerator, Optional, Dict, Any
 from fastapi import APIRouter, File, HTTPException, UploadFile, Query, Depends, Form
+from fastapi.responses import StreamingResponse, JSONResponse
 import os
 import uuid
+import json
 from datetime import datetime
 from document_converter.schema import (
     BatchConversionJobResult,
@@ -15,7 +17,7 @@ from document_converter.service import (
     DoclingDocumentConversion,
 )
 from document_converter.utils import is_file_format_supported
-from document_converter.rag_processor import RAGProcessor
+from document_converter.rag_processor import RAGProcessor, ProcessingStatus, ProcessingStep
 from worker.tasks import convert_document_task, convert_documents_task
 
 router = APIRouter()
@@ -69,52 +71,69 @@ async def convert_single_document(
 
 @router.post(
     "/documents/convert-and-embed",
-    response_model=ConversionResult,
-    response_model_exclude_unset=True,
-    description="Convert a document and generate embeddings for RAG",
+    description="Convert a document and generate embeddings with progress streaming"
 )
 async def convert_and_embed_document(
     document: UploadFile = File(...),
-    creator_id: str = Form(None, description="ID of the user who created/uploaded the document"),
-    contract_id: str = Form(None, description="Associated contract ID"),
-    source_id: int = Form(None, description="Associated source ID"),
+    creator_id: str = Form(None),
+    contract_id: str = Form(None),
+    source_id: int = Form(None),
     extract_tables_as_images: bool = Form(False),
     image_resolution_scale: int = Form(4, ge=1, le=4),
     rag_processor: RAGProcessor = Depends(get_rag_processor),
 ):
-    # First convert the document
-    conversion_result = await convert_single_document(
-        document, 
-        extract_tables_as_images, 
-        image_resolution_scale
-    )
-    
-    # Generate a unique ID for this document
-    document_id = str(uuid.uuid4())
-    
-    # Process the markdown content for RAG
-    metadata = {
-        "document_id": document_id,
-        "filename": document.filename,
-        "content_type": document.content_type,
-        "conversion_timestamp": datetime.utcnow().isoformat(),
-        "has_images": len(conversion_result.images) > 0 if conversion_result.images else False,
-    }
-    
-    # Use markdown content from the conversion result
-    snippets = rag_processor.process_markdown(
-        conversion_result.markdown,  
-        metadata,
-        creator_id=creator_id,
-        contract_id=contract_id,
-        source_id=source_id
-    )
-    
-    # Store snippets in Supabase
-    await rag_processor.store_snippets(snippets)
-    
-    # Return the original conversion result
-    return conversion_result
+    try:
+        # Initialize document processing
+        document_id = await rag_processor.initialize_document_processing(
+            filename=document.filename,
+            content_type=document.content_type,
+            creator_id=creator_id,
+            contract_id=contract_id,
+            source_id=source_id
+        )
+
+        # First convert the document
+        conversion_result = await convert_single_document(
+            document, 
+            extract_tables_as_images, 
+            image_resolution_scale
+        )
+
+        # Prepare metadata
+        metadata = {
+            "filename": document.filename,
+            "content_type": document.content_type,
+            "conversion_timestamp": datetime.utcnow().isoformat(),
+            "has_images": len(conversion_result.images) > 0 if conversion_result.images else False,
+            "creator_id": creator_id,
+            "contract_id": contract_id,
+            "source_id": source_id
+        }
+
+        # Process the document with streaming updates
+        return StreamingResponse(
+            rag_processor.process_document(conversion_result.markdown, document_id, metadata),
+            media_type="application/x-ndjson"
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get(
+    "/documents/{document_id}/status",
+    description="Get the processing status of a document"
+)
+async def get_document_status(
+    document_id: uuid.UUID,
+    rag_processor: RAGProcessor = Depends(get_rag_processor)
+):
+    try:
+        status = await rag_processor.get_processing_status(document_id)
+        return JSONResponse(content=status)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(
