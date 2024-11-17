@@ -3,8 +3,15 @@ from multiprocessing.pool import AsyncResult
 from typing import List
 from fastapi import APIRouter, File, HTTPException, UploadFile, Query
 
-from document_converter.schema import BatchConversionJobResult, ConversationJobResult, ConversionResult
-from document_converter.service import DocumentConverterService, DoclingDocumentConversion
+from document_converter.schema import (
+    BatchConversionJobResult,
+    ConversationJobResult,
+    ConversionResult,
+)
+from document_converter.service import (
+    DocumentConverterService,
+    DoclingDocumentConversion,
+)
 from document_converter.utils import is_file_format_supported
 from worker.tasks import convert_document_task, convert_documents_task
 
@@ -17,7 +24,7 @@ document_converter_service = DocumentConverterService(document_converter=convert
 
 # Document direct conversion endpoints
 @router.post(
-    '/documents/convert',
+    "/documents/convert",
     response_model=ConversionResult,
     response_model_exclude_unset=True,
     description="Convert a single document synchronously",
@@ -29,7 +36,9 @@ async def convert_single_document(
 ):
     file_bytes = await document.read()
     if not is_file_format_supported(file_bytes, document.filename):
-        raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported file format: {document.filename}"
+        )
 
     return document_converter_service.convert_document(
         (document.filename, BytesIO(file_bytes)),
@@ -39,7 +48,7 @@ async def convert_single_document(
 
 
 @router.post(
-    '/documents/batch-convert',
+    "/documents/batch-convert",
     response_model=List[ConversionResult],
     response_model_exclude_unset=True,
     description="Convert multiple documents synchronously",
@@ -53,7 +62,9 @@ async def convert_multiple_documents(
     for document in documents:
         file_bytes = await document.read()
         if not is_file_format_supported(file_bytes, document.filename):
-            raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported file format: {document.filename}"
+            )
         doc_streams.append((document.filename, BytesIO(file_bytes)))
 
     return document_converter_service.convert_documents(
@@ -65,7 +76,7 @@ async def convert_multiple_documents(
 
 # Asynchronous conversion jobs endpoints
 @router.post(
-    '/conversion-jobs',
+    "/conversion-jobs",
     response_model=ConversationJobResult,
     description="Create a conversion job for a single document",
 )
@@ -76,7 +87,9 @@ async def create_single_document_conversion_job(
 ):
     file_bytes = await document.read()
     if not is_file_format_supported(file_bytes, document.filename):
-        raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported file format: {document.filename}"
+        )
 
     task = convert_document_task.delay(
         (document.filename, file_bytes),
@@ -88,7 +101,7 @@ async def create_single_document_conversion_job(
 
 
 @router.get(
-    '/conversion-jobs/{job_id}',
+    "/conversion-jobs/{job_id}",
     response_model=ConversationJobResult,
     description="Get the status of a single document conversion job",
     response_model_exclude_unset=True,
@@ -98,7 +111,7 @@ async def get_conversion_job_status(job_id: str):
 
 
 @router.post(
-    '/batch-conversion-jobs',
+    "/batch-conversion-jobs",
     response_model=BatchConversionJobResult,
     response_model_exclude_unset=True,
     description="Create a conversion job for multiple documents",
@@ -113,7 +126,9 @@ async def create_batch_conversion_job(
     for document in documents:
         file_bytes = await document.read()
         if not is_file_format_supported(file_bytes, document.filename):
-            raise HTTPException(status_code=400, detail=f"Unsupported file format: {document.filename}")
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported file format: {document.filename}"
+            )
         doc_data.append((document.filename, file_bytes))
 
     task = convert_documents_task.delay(
@@ -126,7 +141,7 @@ async def create_batch_conversion_job(
 
 
 @router.get(
-    '/batch-conversion-jobs/{job_id}',
+    "/batch-conversion-jobs/{job_id}",
     response_model=BatchConversionJobResult,
     response_model_exclude_unset=True,
     description="Get the status of a batch conversion job",

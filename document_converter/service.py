@@ -11,7 +11,12 @@ from docling.document_converter import PdfFormatOption, DocumentConverter
 from docling_core.types.doc import ImageRefMode, TableItem, PictureItem
 from fastapi import HTTPException
 
-from document_converter.schema import BatchConversionJobResult, ConversationJobResult, ConversionResult, ImageData
+from document_converter.schema import (
+    BatchConversionJobResult,
+    ConversationJobResult,
+    ConversionResult,
+    ImageData,
+)
 
 logging.basicConfig(level=logging.INFO)
 IMAGE_RESOLUTION_SCALE = 4
@@ -23,18 +28,24 @@ class DocumentConversionBase(ABC):
         pass
 
     @abstractmethod
-    def convert_batch(self, documents: List[Tuple[str, BytesIO]], **kwargs) -> List[ConversionResult]:
+    def convert_batch(
+        self, documents: List[Tuple[str, BytesIO]], **kwargs
+    ) -> List[ConversionResult]:
         pass
 
 
 class DoclingDocumentConversion(DocumentConversionBase):
-    def _setup_pipeline_options(self, extract_tables: bool, image_resolution_scale: int) -> PdfPipelineOptions:
+    def _setup_pipeline_options(
+        self, extract_tables: bool, image_resolution_scale: int
+    ) -> PdfPipelineOptions:
         pipeline_options = PdfPipelineOptions()
         pipeline_options.images_scale = image_resolution_scale
         pipeline_options.generate_page_images = False
         pipeline_options.generate_table_images = extract_tables
         pipeline_options.generate_picture_images = True
-        pipeline_options.ocr_options = EasyOcrOptions(lang=["fr", "de", "es", "en", "it", "pt"])
+        pipeline_options.ocr_options = EasyOcrOptions(
+            lang=["fr", "de", "es", "en", "it", "pt"]
+        )
 
         return pipeline_options
 
@@ -43,7 +54,9 @@ class DoclingDocumentConversion(DocumentConversionBase):
         images = []
         table_counter = 0
         picture_counter = 0
-        content_md = conv_res.document.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER)
+        content_md = conv_res.document.export_to_markdown(
+            image_mode=ImageRefMode.PLACEHOLDER
+        )
 
         for element, _level in conv_res.document.iterate_items():
             if isinstance(element, (TableItem, PictureItem)) and element.image:
@@ -60,8 +73,10 @@ class DoclingDocumentConversion(DocumentConversionBase):
                     image_type = "picture"
                     content_md = content_md.replace("<!-- image -->", image_name, 1)
 
-                image_bytes = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-                images.append(ImageData(type=image_type, filename=image_name, image=image_bytes))
+                image_bytes = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+                images.append(
+                    ImageData(type=image_type, filename=image_name, image=image_bytes)
+                )
 
         return content_md, images
 
@@ -72,20 +87,32 @@ class DoclingDocumentConversion(DocumentConversionBase):
         image_resolution_scale: int = IMAGE_RESOLUTION_SCALE,
     ) -> ConversionResult:
         filename, file = document
-        pipeline_options = self._setup_pipeline_options(extract_tables, image_resolution_scale)
+        pipeline_options = self._setup_pipeline_options(
+            extract_tables, image_resolution_scale
+        )
         doc_converter = DocumentConverter(
-            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
         )
 
-        conv_res = doc_converter.convert(DocumentStream(name=filename, stream=file), raises_on_error=False)
+        conv_res = doc_converter.convert(
+            DocumentStream(name=filename, stream=file), raises_on_error=False
+        )
         doc_filename = conv_res.input.file.stem
 
         if conv_res.errors:
-            logging.error(f"Failed to convert {filename}: {conv_res.errors[0].error_message}")
-            return ConversionResult(filename=doc_filename, error=conv_res.errors[0].error_message)
+            logging.error(
+                f"Failed to convert {filename}: {conv_res.errors[0].error_message}"
+            )
+            return ConversionResult(
+                filename=doc_filename, error=conv_res.errors[0].error_message
+            )
 
         content_md, images = self._process_document_images(conv_res)
-        return ConversionResult(filename=doc_filename, markdown=content_md, images=images)
+        return ConversionResult(
+            filename=doc_filename, markdown=content_md, images=images
+        )
 
     def convert_batch(
         self,
@@ -93,13 +120,20 @@ class DoclingDocumentConversion(DocumentConversionBase):
         extract_tables: bool = False,
         image_resolution_scale: int = IMAGE_RESOLUTION_SCALE,
     ) -> List[ConversionResult]:
-        pipeline_options = self._setup_pipeline_options(extract_tables, image_resolution_scale)
+        pipeline_options = self._setup_pipeline_options(
+            extract_tables, image_resolution_scale
+        )
         doc_converter = DocumentConverter(
-            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
         )
 
         conv_results = doc_converter.convert_all(
-            [DocumentStream(name=filename, stream=file) for filename, file in documents],
+            [
+                DocumentStream(name=filename, stream=file)
+                for filename, file in documents
+            ],
             raises_on_error=False,
         )
 
@@ -108,12 +142,23 @@ class DoclingDocumentConversion(DocumentConversionBase):
             doc_filename = conv_res.input.file.stem
 
             if conv_res.errors:
-                logging.error(f"Failed to convert {conv_res.input.name}: {conv_res.errors[0].error_message}")
-                results.append(ConversionResult(filename=conv_res.input.name, error=conv_res.errors[0].error_message))
+                logging.error(
+                    f"Failed to convert {conv_res.input.name}: {conv_res.errors[0].error_message}"
+                )
+                results.append(
+                    ConversionResult(
+                        filename=conv_res.input.name,
+                        error=conv_res.errors[0].error_message,
+                    )
+                )
                 continue
 
             content_md, images = self._process_document_images(conv_res)
-            results.append(ConversionResult(filename=doc_filename, markdown=content_md, images=images))
+            results.append(
+                ConversionResult(
+                    filename=doc_filename, markdown=content_md, images=images
+                )
+            )
 
         return results
 
@@ -122,14 +167,18 @@ class DocumentConverterService:
     def __init__(self, document_converter: DocumentConversionBase):
         self.document_converter = document_converter
 
-    def convert_document(self, document: Tuple[str, BytesIO], **kwargs) -> ConversionResult:
+    def convert_document(
+        self, document: Tuple[str, BytesIO], **kwargs
+    ) -> ConversionResult:
         result = self.document_converter.convert(document, **kwargs)
         if result.error:
             logging.error(f"Failed to convert {document[0]}: {result.error}")
             raise HTTPException(status_code=500, detail=result.error)
         return result
 
-    def convert_documents(self, documents: List[Tuple[str, BytesIO]], **kwargs) -> List[ConversionResult]:
+    def convert_documents(
+        self, documents: List[Tuple[str, BytesIO]], **kwargs
+    ) -> List[ConversionResult]:
         return self.document_converter.convert_batch(documents, **kwargs)
 
     def convert_document_task(
@@ -158,19 +207,25 @@ class DocumentConverterService:
         """
 
         task = AsyncResult(job_id)
-        if task.state == 'PENDING':
+        if task.state == "PENDING":
             return ConversationJobResult(job_id=job_id, status="IN_PROGRESS")
 
-        elif task.state == 'SUCCESS':
+        elif task.state == "SUCCESS":
             result = task.get()
             # Check if the conversion result contains an error
-            if result.get('error'):
-                return ConversationJobResult(job_id=job_id, status="FAILURE", error=result['error'])
+            if result.get("error"):
+                return ConversationJobResult(
+                    job_id=job_id, status="FAILURE", error=result["error"]
+                )
 
-            return ConversationJobResult(job_id=job_id, status="SUCCESS", result=ConversionResult(**result))
+            return ConversationJobResult(
+                job_id=job_id, status="SUCCESS", result=ConversionResult(**result)
+            )
 
         else:
-            return ConversationJobResult(job_id=job_id, status="FAILURE", error=str(task.result))
+            return ConversationJobResult(
+                job_id=job_id, status="FAILURE", error=str(task.result)
+            )
 
     def get_batch_conversion_task_result(self, job_id: str) -> BatchConversionJobResult:
         """Get the status and results of a batch conversion job.
@@ -182,23 +237,32 @@ class DocumentConverterService:
         """
 
         task = AsyncResult(job_id)
-        if task.state == 'PENDING':
+        if task.state == "PENDING":
             return BatchConversionJobResult(job_id=job_id, status="IN_PROGRESS")
 
         # Task completed successfully, but need to check individual conversion results
-        if task.state == 'SUCCESS':
+        if task.state == "SUCCESS":
             conversion_results = task.get()
             job_results = []
 
             for result in conversion_results:
-                if result.get('error'):
-                    job_result = ConversationJobResult(status="FAILURE", error=result['error'])
+                if result.get("error"):
+                    job_result = ConversationJobResult(
+                        status="FAILURE", error=result["error"]
+                    )
                 else:
                     job_result = ConversationJobResult(
-                        status="SUCCESS", result=ConversionResult(**result).model_dump(exclude_unset=True)
+                        status="SUCCESS",
+                        result=ConversionResult(**result).model_dump(
+                            exclude_unset=True
+                        ),
                     )
                 job_results.append(job_result)
 
-            return BatchConversionJobResult(job_id=job_id, status="SUCCESS", conversion_results=job_results)
+            return BatchConversionJobResult(
+                job_id=job_id, status="SUCCESS", conversion_results=job_results
+            )
 
-        return BatchConversionJobResult(job_id=job_id, status="FAILURE", error=str(task.result))
+        return BatchConversionJobResult(
+            job_id=job_id, status="FAILURE", error=str(task.result)
+        )
