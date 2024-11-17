@@ -179,3 +179,6 @@ cython_debug/
 .idea/modules.xml
 .idea/misc.xml
 .DS_Store
+
+# Project-specific
+/testfiles
