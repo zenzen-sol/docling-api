@@ -44,8 +44,10 @@ async def stream_chunks(
 ) -> None:
     """Asynchronously generate and store factsheet chunks."""
     try:
-        logger.info(f"Starting stream_chunks for job {job_id} with questions {question_keys}")
-        
+        logger.info(
+            f"Starting stream_chunks for job {job_id} with questions {question_keys}"
+        )
+
         # Update job status to processing
         service.supabase.table("factsheet_jobs").update({"status": "processing"}).eq(
             "id", job_id
@@ -67,7 +69,6 @@ async def stream_chunks(
         factsheet_id = await service.create_factsheet(contract_id, user_id)
         logger.info(f"Created factsheet {factsheet_id} for contract {contract_id}")
 
-        sequence = 0
         for question_key in question_keys:
             if question_key not in FACTSHEET_QUESTIONS:
                 logger.error(f"Invalid question key: {question_key}")
@@ -80,58 +81,32 @@ async def stream_chunks(
                 return
 
             logger.info(f"Processing question {question_key} for job {job_id}")
-            # Collect the entire answer first
             full_answer = ""
+            update_count = 0
             async for response in service.generate_answer(
                 contract_id, question_key, factsheet_id
             ):
-                full_answer = response.answers[question_key]
-                if (
-                    len(full_answer) > 0 and sequence % 5 == 0
-                ):  # Only store every 5th update
+                current_answer = response.answers[question_key]
+                # Only update if the answer has changed and is not empty
+                if current_answer != full_answer and len(current_answer) > 0:
+                    update_count += 1
+                    logger.debug(f"Answer update #{update_count} for {question_key}: {len(current_answer)} chars")
+                    
                     try:
-                        # Store chunk in database
-                        chunk_data = {
-                            "job_id": job_id,
-                            "sequence": sequence,
-                            "content": json.dumps(
-                                {
-                                    "key": question_key,
-                                    "content": full_answer,
-                                }
-                            ),
-                        }
-                        logger.info(f"Inserting chunk {sequence} for job {job_id}: {chunk_data}")
-                        result = service.supabase.table("factsheet_chunks").insert(
-                            chunk_data
-                        ).execute()
-                        logger.info(f"Chunk insertion result: {result}")
-                        sequence += 1
+                        # Update the answer in factsheet_answers
+                        await service.save_answer(factsheet_id, question_key, current_answer)
+                        logger.debug(f"Updated answer for {question_key} in factsheet_answers")
                     except Exception as e:
-                        logger.error(f"Error inserting chunk: {str(e)}", exc_info=True)
+                        logger.error(f"Error updating answer: {str(e)}", exc_info=True)
                         raise
+                    
+                    full_answer = current_answer
 
-            # Store final chunk if we haven't already
-            if sequence == 0 or len(full_answer) > 0:
-                try:
-                    chunk_data = {
-                        "job_id": job_id,
-                        "sequence": sequence,
-                        "content": json.dumps(
-                            {
-                                "key": question_key,
-                                "content": full_answer,
-                            }
-                        ),
-                    }
-                    logger.info(f"Inserting final chunk {sequence} for job {job_id}: {chunk_data}")
-                    result = service.supabase.table("factsheet_chunks").insert(
-                        chunk_data
-                    ).execute()
-                    logger.info(f"Final chunk insertion result: {result}")
-                except Exception as e:
-                    logger.error(f"Error inserting final chunk: {str(e)}", exc_info=True)
-                    raise
+        # Update factsheet timestamp at the end
+        service.supabase.table("factsheets").update({
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", factsheet_id).execute()
+        logger.info(f"Updated factsheet {factsheet_id} timestamp")
 
         logger.info(f"Marking job {job_id} as completed")
         # Mark job as completed
@@ -201,8 +176,11 @@ async def get_chunks(
 ):
     """Get chunks for a factsheet generation job."""
     try:
+        logger.info(f"Fetching chunks for job {job_id} with cursor {cursor}")
+
         # Verify contract access
         if not await service.verify_contract_access(contract_id, user_id):
+            logger.error(f"Contract access verification failed for user {user_id}")
             raise HTTPException(status_code=404, detail="Contract not found")
 
         # Get job status
@@ -213,35 +191,42 @@ async def get_chunks(
             .eq("user_id", user_id)
             .execute()
         )
+        logger.info(f"Job query result: {job_result.data}")
 
         if not job_result.data:
+            logger.error(f"Job {job_id} not found for user {user_id}")
             raise HTTPException(status_code=404, detail="Job not found")
 
         job = job_result.data[0]
+        logger.info(f"Job status: {job['status']}")
 
         # Get new chunks
-        chunks_result = (
+        chunks_query = (
             service.supabase.table("factsheet_chunks")
             .select("*")
             .eq("job_id", job_id)
             .gt("sequence", int(cursor))
             .order("sequence", ascending=True)
             .limit(50)
-            .execute()
         )
+        logger.debug(f"Chunks query: {chunks_query}")
+        chunks_result = chunks_query.execute()
+        logger.info(f"Found {len(chunks_result.data or [])} new chunks")
+        logger.debug(f"Chunks result: {chunks_result.data}")
 
         chunks = chunks_result.data or []
         new_cursor = str(chunks[-1]["sequence"]) if chunks else cursor
+        logger.info(f"New cursor: {new_cursor}")
 
-        return JSONResponse(
-            {
-                "id": job_id,
-                "chunks": [chunk["content"] for chunk in chunks],
-                "cursor": new_cursor,
-                "done": job["status"] in ["completed", "error"],
-                "error": job.get("error"),
-            }
-        )
+        response_data = {
+            "id": job_id,
+            "chunks": [chunk["content"] for chunk in chunks],
+            "cursor": new_cursor,
+            "done": job["status"] in ["completed", "error"],
+            "error": job.get("error"),
+        }
+        logger.info(f"Returning response: {response_data}")
+        return JSONResponse(response_data)
 
     except Exception as e:
         logger.error(f"Error fetching chunks: {str(e)}", exc_info=True)

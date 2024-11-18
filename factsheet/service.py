@@ -135,49 +135,33 @@ class FactsheetService:
                 raise  # Re-raise if it's not a unique violation
 
     async def generate_answer(
-        self,
-        contract_id: str,
-        question_key: str,
-        factsheet_id: str
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Generate an answer for a specific question using RAG and LLM."""
+        self, contract_id: str, question_key: str, factsheet_id: str
+    ) -> AsyncGenerator[StreamingFactsheetResponse, None]:
+        """Generate an answer for a single question."""
         try:
-            question_config = FACTSHEET_QUESTIONS[question_key]
-            logger.info(f"[{factsheet_id}] Getting context for question: {question_config['question']}")
-            context = await self.get_relevant_context(contract_id, question_config["question"])
-            logger.info(f"[{factsheet_id}] Found {len(context)} relevant context chunks")
-            
-            prompt = f"""
-            {question_config["prompt"]}
+            logger.info(f"Generating answer for question {question_key}")
+            # Prepare context for the question
+            context = await self.get_relevant_context(contract_id, FACTSHEET_QUESTIONS[question_key]["question"])
+            logger.debug(f"Context prepared for {question_key}: {len(context)} chars")
+
+            # Stream the response
+            async for chunk in self.rag_processor.stream(f"""
+            {FACTSHEET_QUESTIONS[question_key]["prompt"]}
             
             Contract excerpts:
             {context}
-            """
-            logger.info(f"[{factsheet_id}] Starting LLM stream for question: {question_key}")
-            
-            answer_chunks = []
-            async for chunk in self.rag_processor.stream(prompt):
-                answer_chunks.append(chunk)
-                logger.debug(f"[{factsheet_id}] Received chunk: {chunk}")
+            """):
+                logger.debug(f"Received chunk for {question_key}: {len(chunk)} chars")
                 yield StreamingFactsheetResponse(
-                    answers={question_key: "".join(answer_chunks)},
+                    answers={question_key: chunk},
                     is_complete=False
                 )
             
-            final_answer = "".join(answer_chunks)
-            logger.info(f"[{factsheet_id}] Saving answer for question {question_key}")
-            await self.save_answer(factsheet_id, question_key, final_answer)
-            
-            # Update factsheet updated_at timestamp
-            self.supabase.table("factsheets").update({
-                "updated_at": datetime.utcnow().isoformat()
-            }).eq("id", factsheet_id).execute()
-            logger.info(f"[{factsheet_id}] Updated factsheet timestamp")
-            
+            # Note: We no longer save the answer here, it will be saved by stream_chunks
             yield StreamingFactsheetResponse(
-                answers={question_key: final_answer},
+                answers={question_key: chunk},
                 is_complete=True
             )
         except Exception as e:
-            logger.error(f"[{factsheet_id}] Error generating answer: {str(e)}", exc_info=True)
+            logger.error(f"Error generating answer: {str(e)}", exc_info=True)
             raise
