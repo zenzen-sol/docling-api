@@ -20,6 +20,7 @@ from document_converter.service import (
 )
 from document_converter.utils import is_file_format_supported
 from document_converter.rag_processor import RAGProcessor, ProcessingStatus, ProcessingStep
+from shared.dependencies import get_rag_processor
 from worker.tasks import convert_document_task, convert_documents_task
 from starlette.datastructures import Headers
 
@@ -29,18 +30,6 @@ router = APIRouter()
 converter = DoclingDocumentConversion()
 document_converter_service = DocumentConverterService(document_converter=converter)
 
-
-# Initialize RAG processor with environment variables
-def get_rag_processor():
-    supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    if not supabase_url or not supabase_key:
-        raise HTTPException(
-            status_code=500,
-            detail="Supabase configuration missing"
-        )
-    supabase = create_client(supabase_url, supabase_key)
-    return RAGProcessor(supabase)
 
 # Document direct conversion endpoints
 @router.post(

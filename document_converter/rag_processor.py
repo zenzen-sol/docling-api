@@ -4,10 +4,14 @@ from functools import lru_cache
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from uuid import UUID
+import os
+import asyncio
+import json
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from postgrest import APIError
+import httpx
 
 class ValidationError(Exception):
     pass
@@ -42,6 +46,8 @@ class ProcessingStatus(Enum):
 
 class RAGProcessor:
     DEFAULT_MODEL = "BAAI/bge-m3"
+    OLLAMA_BASE_URL = "http://localhost:11434"
+    LLM_MODEL = "llama3.1:8b"  # Using llama3.1 8B model
     
     def __init__(self, supabase_client, model_name: Optional[str] = None):
         """
@@ -55,6 +61,7 @@ class RAGProcessor:
         self.supabase = supabase_client
         self.model = SentenceTransformer(model_name or self.DEFAULT_MODEL)
         self.MAX_BATCH_SIZE = 10
+        self.http_client = httpx.AsyncClient()
 
     async def get_source_details(self, source_id: int) -> Tuple[Dict, Dict, UUID]:
         """
@@ -430,8 +437,14 @@ class RAGProcessor:
         """
         Generate and cache embeddings for a single text chunk
         """
-        prefixed_text = f"Represent this legal text for retrieval: {text}"
-        return self.model.encode(prefixed_text, normalize_embeddings=True)
+        return self.model.encode(text)
+
+    async def get_embedding(self, text: str) -> str:
+        """
+        Get embedding for text and return as a string for Supabase.
+        """
+        embedding = self._get_embedding(text)
+        return f"[{','.join(str(float(x)) for x in embedding.flatten())}]"
 
     def _process_chunk_batch(self, chunks: List[str]) -> List[np.ndarray]:
         """
@@ -608,3 +621,30 @@ class RAGProcessor:
                 "conversion_id": str(conversion_id) if 'conversion_id' in locals() else None
             }
             raise
+
+    async def stream(self, prompt: str) -> AsyncGenerator[str, None]:
+        """Stream responses from the LLM using Ollama."""
+        try:
+            async with self.http_client.stream(
+                'POST',
+                f"{self.OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": self.LLM_MODEL,
+                    "prompt": prompt,
+                    "stream": True
+                },
+                timeout=None
+            ) as response:
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if "response" in data:
+                            yield data["response"]
+                        if data.get("done", False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            raise ValidationError(f"Error streaming from Ollama: {str(e)}")

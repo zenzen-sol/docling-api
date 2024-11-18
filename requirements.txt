@@ -4,3 +4,4 @@ sentence-transformers==2.2.2
 fastapi==0.104.1
 python-multipart==0.0.6
 uvicorn==0.23.2
+PyJWT==2.8.0
