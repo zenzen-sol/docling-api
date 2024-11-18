@@ -1,4 +1,4 @@
-from typing import AsyncGenerator, Dict, Any, List
+from typing import AsyncGenerator, Dict, Any, List, Optional
 import uuid
 from datetime import datetime
 import logging
@@ -9,6 +9,9 @@ from supabase.client import Client
 from document_converter.rag_processor import RAGProcessor
 from .schema import FACTSHEET_QUESTIONS, StreamingFactsheetResponse
 from postgrest import APIError
+import os
+import redis.asyncio as redis
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +20,10 @@ class FactsheetService:
         """Initialize the factsheet service."""
         self.supabase = supabase
         self.rag_processor = rag_processor
+        # Initialize Redis client using the same connection as Celery
+        self.redis = redis.from_url(
+            os.environ.get("REDIS_HOST", "redis://localhost:6379/0")
+        )
 
     async def cleanup(self):
         """Cleanup resources."""
@@ -133,6 +140,50 @@ class FactsheetService:
                 }).eq("factsheet_id", factsheet_id).eq("question_key", question_key).execute()
             else:
                 raise  # Re-raise if it's not a unique violation
+
+    async def store_update(self, job_id: str, question_key: str, content: str) -> None:
+        """Store a streaming update in Redis."""
+        try:
+            key = f"factsheet:updates:{job_id}"
+            logger.info(f"Storing update in Redis for key: {key}")
+            
+            # Get existing updates
+            updates = await self.redis.get(key)
+            if updates:
+                updates = json.loads(updates)
+            else:
+                updates = []
+
+            # Add new update
+            updates.append({"key": question_key, "content": content})
+            logger.info(f"Total updates for job {job_id}: {len(updates)}")
+
+            # Store with 1-hour TTL
+            await self.redis.setex(key, 3600, json.dumps(updates))
+        except Exception as e:
+            logger.error(f"Error storing update in Redis: {str(e)}", exc_info=True)
+            raise
+
+    async def get_job_updates(self, job_id: str, cursor: int = 0) -> List[Dict]:
+        """Get updates after the given cursor."""
+        try:
+            key = f"factsheet:updates:{job_id}"
+            logger.info(f"Getting updates from Redis for key: {key}, cursor: {cursor}")
+            
+            # Get all updates
+            updates = await self.redis.get(key)
+            if not updates:
+                logger.info(f"No updates found for job {job_id}")
+                return []
+
+            updates = json.loads(updates)
+            logger.info(f"Found {len(updates)} total updates, returning from cursor {cursor}")
+            
+            # Return updates after cursor
+            return updates[cursor:]
+        except Exception as e:
+            logger.error(f"Error getting updates from Redis: {str(e)}", exc_info=True)
+            return []
 
     async def generate_answer(
         self, contract_id: str, question_key: str, factsheet_id: str

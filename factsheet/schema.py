@@ -27,6 +27,11 @@ class Factsheet(BaseModel):
     updated_at: datetime
 
 
+class GenerateFactsheetRequest(BaseModel):
+    question_keys: List[str]
+    job_id: str
+
+
 # Predefined questions and prompts
 FACTSHEET_QUESTIONS = {
     "parties": {
