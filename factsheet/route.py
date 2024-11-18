@@ -6,7 +6,6 @@ import logging
 from datetime import datetime
 import jwt
 import asyncio
-from uuid import uuid4
 
 from document_converter.rag_processor import RAGProcessor
 from shared.dependencies import get_rag_processor, get_supabase_client
@@ -45,21 +44,33 @@ async def stream_chunks(
 ) -> None:
     """Asynchronously generate and store factsheet chunks."""
     try:
+        logger.info(f"Starting stream_chunks for job {job_id} with questions {question_keys}")
+        
         # Update job status to processing
         service.supabase.table("factsheet_jobs").update({"status": "processing"}).eq(
             "id", job_id
         ).execute()
+        logger.info(f"Updated job {job_id} status to processing")
 
         # Get user_id from job
-        job = service.supabase.table("factsheet_jobs").select("user_id").eq("id", job_id).single().execute()
+        job = (
+            service.supabase.table("factsheet_jobs")
+            .select("user_id")
+            .eq("id", job_id)
+            .single()
+            .execute()
+        )
         user_id = job.data["user_id"]
+        logger.info(f"Retrieved user_id {user_id} for job {job_id}")
 
         # Create factsheet first
         factsheet_id = await service.create_factsheet(contract_id, user_id)
+        logger.info(f"Created factsheet {factsheet_id} for contract {contract_id}")
 
         sequence = 0
         for question_key in question_keys:
             if question_key not in FACTSHEET_QUESTIONS:
+                logger.error(f"Invalid question key: {question_key}")
                 service.supabase.table("factsheet_jobs").update(
                     {
                         "status": "error",
@@ -68,16 +79,19 @@ async def stream_chunks(
                 ).eq("id", job_id).execute()
                 return
 
+            logger.info(f"Processing question {question_key} for job {job_id}")
             # Collect the entire answer first
             full_answer = ""
             async for response in service.generate_answer(
                 contract_id, question_key, factsheet_id
             ):
                 full_answer = response.answers[question_key]
-                if len(full_answer) > 0 and sequence % 5 == 0:  # Only store every 5th update
-                    # Store chunk in database
-                    service.supabase.table("factsheet_chunks").insert(
-                        {
+                if (
+                    len(full_answer) > 0 and sequence % 5 == 0
+                ):  # Only store every 5th update
+                    try:
+                        # Store chunk in database
+                        chunk_data = {
                             "job_id": job_id,
                             "sequence": sequence,
                             "content": json.dumps(
@@ -87,13 +101,20 @@ async def stream_chunks(
                                 }
                             ),
                         }
-                    ).execute()
-                    sequence += 1
+                        logger.info(f"Inserting chunk {sequence} for job {job_id}: {chunk_data}")
+                        result = service.supabase.table("factsheet_chunks").insert(
+                            chunk_data
+                        ).execute()
+                        logger.info(f"Chunk insertion result: {result}")
+                        sequence += 1
+                    except Exception as e:
+                        logger.error(f"Error inserting chunk: {str(e)}", exc_info=True)
+                        raise
 
             # Store final chunk if we haven't already
             if sequence == 0 or len(full_answer) > 0:
-                service.supabase.table("factsheet_chunks").insert(
-                    {
+                try:
+                    chunk_data = {
                         "job_id": job_id,
                         "sequence": sequence,
                         "content": json.dumps(
@@ -103,8 +124,16 @@ async def stream_chunks(
                             }
                         ),
                     }
-                ).execute()
+                    logger.info(f"Inserting final chunk {sequence} for job {job_id}: {chunk_data}")
+                    result = service.supabase.table("factsheet_chunks").insert(
+                        chunk_data
+                    ).execute()
+                    logger.info(f"Final chunk insertion result: {result}")
+                except Exception as e:
+                    logger.error(f"Error inserting final chunk: {str(e)}", exc_info=True)
+                    raise
 
+        logger.info(f"Marking job {job_id} as completed")
         # Mark job as completed
         service.supabase.table("factsheet_jobs").update({"status": "completed"}).eq(
             "id", job_id
@@ -136,24 +165,10 @@ async def generate_factsheet(
             logger.error(f"Contract access verification failed for user {user_id}")
             raise HTTPException(status_code=404, detail="Contract not found")
 
-        # Create new job
-        job_id = str(uuid4())
-        result = (
-            service.supabase.table("factsheet_jobs")
-            .insert(
-                {
-                    "id": job_id,
-                    "user_id": user_id,
-                    "contract_id": contract_id,
-                    "question_keys": request.question_keys,
-                    "status": "pending",
-                }
-            )
-            .execute()
-        )
-
-        if not result.data:
-            raise HTTPException(status_code=500, detail="Failed to create job")
+        # Use job_id from request or fail
+        job_id = request.job_id
+        if not job_id:
+            raise HTTPException(status_code=400, detail="job_id is required")
 
         # Start generation in background
         background_tasks.add_task(
@@ -231,79 +246,3 @@ async def get_chunks(
     except Exception as e:
         logger.error(f"Error fetching chunks: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/{contract_id}/factsheet/generate")
-async def generate_factsheet(
-    contract_id: str,
-    request: FactsheetRequest,
-    user_id: str = Depends(get_user_id),
-    supabase=Depends(get_supabase_client),
-    rag_processor=Depends(get_rag_processor),
-):
-    """Generate factsheet for a contract."""
-    logger.info(f"Request: {request.model_dump()}")
-
-    service = FactsheetService(supabase, rag_processor)
-
-    # Verify contract access
-    if not service.verify_contract_access(contract_id, user_id):
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    try:
-        # Create job record
-        job = (
-            service.supabase.table("factsheet_jobs")
-            .insert(
-                {
-                    "contract_id": contract_id,
-                    "user_id": user_id,
-                    "status": "processing",
-                    "created_at": datetime.utcnow().isoformat(),
-                    "question_keys": request.question_keys,
-                }
-            )
-            .execute()
-        )
-
-        if not job.data:
-            raise HTTPException(status_code=500, detail="Failed to create job")
-
-        job_id = job.data[0]["id"]
-        return {"job_id": job_id}
-
-    except Exception as e:
-        logger.error(
-            f"Error initializing factsheet generation: {str(e)}", exc_info=True
-        )
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{contract_id}/factsheet/chunks")
-async def get_factsheet_chunks(
-    contract_id: str,
-    job_id: str,
-    question_key: str,
-    user_id: str = Depends(get_user_id),
-    supabase=Depends(get_supabase_client),
-    rag_processor=Depends(get_rag_processor),
-) -> StreamingResponse:
-    """Stream factsheet chunks for a specific question."""
-    service = FactsheetService(supabase, rag_processor)
-
-    # Verify contract access
-    if not service.verify_contract_access(contract_id, user_id):
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    async def generate() -> AsyncGenerator[str, None]:
-        try:
-            async for chunk in service.generate_answer(
-                contract_id, question_key, job_id
-            ):
-                yield f"data: {json.dumps(chunk)}\n\n"
-        except Exception as e:
-            logger.error(f"Error generating answer: {str(e)}", exc_info=True)
-            error_response = {"error": str(e)}
-            yield f"data: {json.dumps(error_response)}\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")

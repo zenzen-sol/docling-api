@@ -143,9 +143,9 @@ class FactsheetService:
         """Generate an answer for a specific question using RAG and LLM."""
         try:
             question_config = FACTSHEET_QUESTIONS[question_key]
-            logger.info(f"Getting context for question: {question_config['question']}")
+            logger.info(f"[{factsheet_id}] Getting context for question: {question_config['question']}")
             context = await self.get_relevant_context(contract_id, question_config["question"])
-            logger.info(f"Found {len(context)} relevant context chunks")
+            logger.info(f"[{factsheet_id}] Found {len(context)} relevant context chunks")
             
             prompt = f"""
             {question_config["prompt"]}
@@ -153,29 +153,31 @@ class FactsheetService:
             Contract excerpts:
             {context}
             """
-            logger.info("Starting LLM stream")
+            logger.info(f"[{factsheet_id}] Starting LLM stream for question: {question_key}")
             
             answer_chunks = []
             async for chunk in self.rag_processor.stream(prompt):
                 answer_chunks.append(chunk)
+                logger.debug(f"[{factsheet_id}] Received chunk: {chunk}")
                 yield StreamingFactsheetResponse(
                     answers={question_key: "".join(answer_chunks)},
                     is_complete=False
                 )
             
             final_answer = "".join(answer_chunks)
-            logger.info(f"Saving answer for question {question_key}")
+            logger.info(f"[{factsheet_id}] Saving answer for question {question_key}")
             await self.save_answer(factsheet_id, question_key, final_answer)
             
             # Update factsheet updated_at timestamp
             self.supabase.table("factsheets").update({
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("id", factsheet_id).execute()
+            logger.info(f"[{factsheet_id}] Updated factsheet timestamp")
             
             yield StreamingFactsheetResponse(
                 answers={question_key: final_answer},
                 is_complete=True
             )
         except Exception as e:
-            logger.error(f"Error generating answer: {str(e)}", exc_info=True)
+            logger.error(f"[{factsheet_id}] Error generating answer: {str(e)}", exc_info=True)
             raise
