@@ -1,14 +1,14 @@
-from typing import AsyncGenerator, List, Dict, Any
+from typing import AsyncGenerator, Dict, Any, List
 import uuid
 from datetime import datetime
 import logging
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 from contextlib import asynccontextmanager
-
-from supabase import Client
+from supabase.client import Client
 from document_converter.rag_processor import RAGProcessor
 from .schema import FACTSHEET_QUESTIONS, StreamingFactsheetResponse
+from postgrest import APIError
 
 logger = logging.getLogger(__name__)
 
@@ -17,66 +17,15 @@ class FactsheetService:
         """Initialize the factsheet service."""
         self.supabase = supabase
         self.rag_processor = rag_processor
-        # Configure custom HTTP client
-        self.http_client = httpx.AsyncClient(
-            http1=True,  # Force HTTP/1.1
-            http2=False,
-            verify=True,
-            timeout=30.0,
-            limits=httpx.Limits(
-                max_keepalive_connections=5,
-                max_connections=10,
-                keepalive_expiry=5
-            )
-        )
 
     async def cleanup(self):
         """Cleanup resources."""
-        await self.http_client.aclose()
+        # No cleanup needed
 
-    @asynccontextmanager
-    async def _get_http_client(self):
-        """Get HTTP client with proper headers."""
-        headers = dict(self.supabase._client.headers)
-        headers["Connection"] = "close"
-        async with httpx.AsyncClient(
-            headers=headers,
-            base_url=str(self.supabase._client.base_url),
-            http1=True,
-            http2=False,
-            verify=True,
-            timeout=30.0
-        ) as client:
-            yield client
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        reraise=True
-    )
-    async def _execute_supabase_query(self, query):
-        """Execute a Supabase query with retry logic."""
-        try:
-            # Extract the raw request from the query
-            req = query._session.build_request()
-            
-            # Use our custom HTTP client
-            async with self._get_http_client() as client:
-                response = await client.send(req)
-                response.raise_for_status()
-                return type('Response', (), {'data': response.json()})()
-                
-        except (httpx.RemoteProtocolError, httpx.ConnectError) as e:
-            logger.warning(f"Supabase query failed, retrying: {str(e)}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error during Supabase query: {str(e)}", exc_info=True)
-            raise
-
-    def verify_contract_access(self, contract_id: str, user_id: str) -> bool:
+    async def verify_contract_access(self, contract_id: str, user_id: str) -> bool:
         """Verify that the user has access to the specified contract."""
         result = self.supabase.table("contracts").select("id").eq("id", contract_id).eq("owner_id", user_id).execute()
-        return len(result.data) > 0
+        return bool(result.data)
 
     async def get_relevant_context(self, contract_id: str, question: str) -> List[str]:
         """Get relevant context for a question using RAG."""
@@ -86,14 +35,15 @@ class FactsheetService:
             logger.info("Querying citations for relevant context")
             
             # Use the match_citations function instead of direct vector query
-            result = self.supabase.rpc(
+            query = self.supabase.rpc(
                 'match_citations',
                 {
                     'query_embedding': question_embedding,
                     'match_count': 5,
                     'target_contract_id': contract_id
                 }
-            ).execute()
+            )
+            result = query.execute()
             
             if not result.data:
                 logger.warning(f"No relevant citations found for contract {contract_id}")
@@ -106,7 +56,7 @@ class FactsheetService:
             # Return empty context rather than failing completely
             return []
 
-    def create_or_update_factsheet(self, contract_id: str, user_id: str) -> str:
+    async def create_or_update_factsheet(self, contract_id: str, user_id: str) -> str:
         """Create a new factsheet or update existing one and return its ID."""
         # Check for existing factsheet
         result = self.supabase.table("factsheets").select("id").eq("contract_id", contract_id).execute()
@@ -136,29 +86,53 @@ class FactsheetService:
         
         return factsheet_id
 
-    def create_factsheet(self, contract_id: str, user_id: str) -> str:
-        """Create a new factsheet and return its ID."""
-        factsheet_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
-        self.supabase.table("factsheets").insert({
-            "id": factsheet_id,
-            "contract_id": contract_id,
-            "created_at": now,
-            "updated_at": now,
-            "created_by": user_id,
-            "owner_id": user_id
-        }).execute()
-        return factsheet_id
+    async def create_factsheet(self, contract_id: str, user_id: str) -> str:
+        """Create a new factsheet or return existing one and update its timestamp."""
+        try:
+            # Try to create new factsheet
+            factsheet_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat()
+            self.supabase.table("factsheets").insert({
+                "id": factsheet_id,
+                "contract_id": contract_id,
+                "created_at": now,
+                "updated_at": now,
+                "created_by": user_id,
+                "owner_id": user_id
+            }).execute()
+            return factsheet_id
+        except APIError as e:
+            if getattr(e, "code", None) == "23505":  # Unique violation
+                # Get existing factsheet
+                result = self.supabase.table("factsheets").select("id").eq("contract_id", contract_id).single().execute()
+                if result.data:
+                    factsheet_id = result.data["id"]
+                    # Update timestamp
+                    self.supabase.table("factsheets").update({
+                        "updated_at": datetime.utcnow().isoformat()
+                    }).eq("id", factsheet_id).execute()
+                    return factsheet_id
+            raise  # Re-raise if it's not a unique violation or factsheet not found
 
-    def save_answer(self, factsheet_id: str, question_key: str, answer: str):
-        """Save or update an answer in the database."""
-        self.supabase.table("factsheet_answers").upsert({
-            "id": str(uuid.uuid4()),
-            "factsheet_id": factsheet_id,
-            "question_key": question_key,
-            "answer": answer,
-            "last_updated": datetime.utcnow().isoformat()
-        }).execute()
+    async def save_answer(self, factsheet_id: str, question_key: str, answer: str):
+        """Save or update an answer for a factsheet question."""
+        try:
+            # Try to create new answer
+            self.supabase.table("factsheet_answers").insert({
+                "factsheet_id": factsheet_id,
+                "question_key": question_key,
+                "answer": answer,
+                "last_updated": datetime.utcnow().isoformat()
+            }).execute()
+        except APIError as e:
+            if getattr(e, "code", None) == "23505":  # Unique violation
+                # Update existing answer
+                self.supabase.table("factsheet_answers").update({
+                    "answer": answer,
+                    "last_updated": datetime.utcnow().isoformat()
+                }).eq("factsheet_id", factsheet_id).eq("question_key", question_key).execute()
+            else:
+                raise  # Re-raise if it's not a unique violation
 
     async def generate_answer(
         self,
@@ -191,7 +165,7 @@ class FactsheetService:
             
             final_answer = "".join(answer_chunks)
             logger.info(f"Saving answer for question {question_key}")
-            self.save_answer(factsheet_id, question_key, final_answer)
+            await self.save_answer(factsheet_id, question_key, final_answer)
             
             # Update factsheet updated_at timestamp
             self.supabase.table("factsheets").update({
