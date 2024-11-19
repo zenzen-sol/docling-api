@@ -208,7 +208,7 @@ class FactsheetService:
                     is_complete=False
                 )
             
-            # Note: We no longer save the answer here, it will be saved by stream_chunks
+            # Send final chunk with is_complete=True
             yield StreamingFactsheetResponse(
                 answers={question_key: chunk},
                 is_complete=True
