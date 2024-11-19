@@ -126,6 +126,7 @@ async def websocket_endpoint(
     websocket: WebSocket,
     contract_id: str,
     job_id: str,
+    api_key: str,
     service: FactsheetService = Depends(get_factsheet_service),
 ):
     """WebSocket endpoint for streaming factsheet updates."""
@@ -134,19 +135,41 @@ async def websocket_endpoint(
         await websocket.accept()
         logger.info(f"WebSocket connected for job {job_id}")
 
-        # Wait for authentication
-        auth_message = await websocket.receive_json()
-        if not isinstance(auth_message, dict) or 'token' not in auth_message or auth_message.get('type') != 'auth':
-            logger.error("Invalid auth message format")
-            await websocket.send_json({"type": "error", "message": "Invalid authentication format"})
+        # Verify API key and get user_id
+        result = (
+            service.supabase.from_("profiles")
+            .select("id")
+            .eq("api_key", api_key)
+            .single()
+            .execute()
+        )
+        
+        if not result.data:
+            logger.error("Invalid API key")
+            await websocket.send_json({"type": "error", "message": "Invalid API key"})
             await websocket.close()
             return
             
-        token = auth_message['token']
+        user_id = result.data["id"]
         
-        # Verify token using the manager
-        if not await manager.authenticate(websocket, token, contract_id, job_id):
+        # Verify contract access
+        access_result = (
+            service.supabase.from_("contracts")
+            .select("id")
+            .eq("id", contract_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        
+        if not access_result.data:
+            logger.error(f"User {user_id} not authorized for contract {contract_id}")
+            await websocket.send_json({"type": "error", "message": "Not authorized"})
+            await websocket.close()
             return
+
+        # Send connected message
+        await websocket.send_json({"type": "connected"})
 
         # Start streaming updates
         try:
@@ -168,7 +191,6 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for job {job_id}")
-        await manager.disconnect(websocket, job_id)
     except Exception as e:
         logger.error(f"WebSocket error for job {job_id}: {e}")
         try:
@@ -202,38 +224,26 @@ async def generate_factsheet(
         # Create factsheet record
         factsheet_id = await service.create_factsheet(contract_id, token)
 
-        # Store the WebSocket token in Redis with expiry
-        ws_data = {
-            "job_id": request.job_id,
-            "contract_id": contract_id,
-            "user_id": token
-        }
-        await manager.redis.setex(
-            f"ws_token:{request.ws_token}",
-            300,  # 5 minute expiry
-            json.dumps(ws_data)
-        )
-
-        # Start generation in background
+        # Start answer generation in background
         background_tasks.add_task(
-            generate_answers,  
-            service=service,
-            contract_id=contract_id,
-            question_keys=request.question_keys,
-            job_id=request.job_id,
-            user_id=token,
-            factsheet_id=factsheet_id,
+            generate_answers,
+            service,
+            contract_id,
+            request.question_keys,
+            request.job_id,
+            token,
+            factsheet_id,
         )
 
         return {
-            "status": "processing",
             "job_id": request.job_id,
             "factsheet_id": factsheet_id,
+            "message": "Factsheet generation started"
         }
 
     except Exception as e:
-        logger.error(f"Failed to start generation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error starting factsheet generation: {e}")
+        raise HTTPException(status_code=500, detail="Error starting factsheet generation")
 
 
 @router.get("/updates")
