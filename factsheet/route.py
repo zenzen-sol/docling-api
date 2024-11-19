@@ -90,17 +90,14 @@ async def generate_answers(
             ):
                 current_chunk = response.answers[question_key]
                 if len(current_chunk) > 0:
-                    # Accumulate locally
+                    # Store only the new chunk in Redis
+                    logger.info(f"Publishing chunk for {question_key}, length: {len(current_chunk)}")
+                    await service.store_update(job_id, question_key, current_chunk)
+                    # Accumulate locally for final storage
                     if not full_answer:
                         full_answer = current_chunk
                     else:
                         full_answer += current_chunk
-
-                    # Store update in Redis
-                    # logger.info(
-                    #     f"Storing update for {question_key}, length: {len(full_answer)}"
-                    # )
-                    await service.store_update(job_id, question_key, full_answer)
 
             # Store final answer in Supabase
             logger.info(
@@ -110,12 +107,26 @@ async def generate_answers(
 
         # Mark job as completed
         logger.info(f"Marking job {job_id} as completed")
+        await service.redis.publish(
+            f"factsheet:{job_id}",
+            json.dumps({
+                "type": "complete",
+                "message": "All questions completed"
+            })
+        )
         service.supabase.table("factsheet_jobs").update({"status": "completed"}).eq(
             "id", job_id
         ).execute()
 
     except Exception as e:
         logger.error(f"Error in generation: {str(e)}", exc_info=True)
+        await service.redis.publish(
+            f"factsheet:{job_id}",
+            json.dumps({
+                "type": "error",
+                "message": str(e)
+            })
+        )
         service.supabase.table("factsheet_jobs").update(
             {"status": "error", "error": str(e)}
         ).eq("id", job_id).execute()
@@ -170,13 +181,16 @@ async def websocket_endpoint(
 
         # Send connected message
         await websocket.send_json({"type": "connected"})
+        logger.info(f"Starting Redis subscription for job {job_id}")
 
         # Start streaming updates
         try:
             async for update in service.subscribe_to_updates(job_id):
                 try:
+                    logger.info(f"Sending update for job {job_id}: {update}")
                     await websocket.send_json(update)
                     if update.get("type") in ["complete", "error"]:
+                        logger.info(f"Received {update['type']} message, closing connection")
                         break
                 except Exception as e:
                     logger.error(f"Error sending update: {e}")

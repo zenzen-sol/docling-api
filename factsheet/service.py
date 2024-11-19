@@ -188,24 +188,17 @@ class FactsheetService:
     async def store_update(self, job_id: str, question_key: str, content: str) -> None:
         """Store a streaming update in Redis."""
         try:
-            key = f"factsheet:updates:{job_id}"
-            # logger.info(f"Storing update in Redis for key: {key}")
-
-            # Get existing updates
-            updates = await self.redis.get(key)
-            if updates:
-                updates = json.loads(updates)
-            else:
-                updates = []
-
-            # Add new update
-            updates.append({"key": question_key, "content": content})
-            # logger.info(f"Total updates for job {job_id}: {len(updates)}")
-
-            # Store with 1-hour TTL
-            await self.redis.setex(key, 3600, json.dumps(updates))
+            logger.info(f"Storing update for job {job_id}, question {question_key}")
+            await self.redis.publish(
+                f"factsheet:{job_id}",
+                json.dumps({
+                    "type": "update",
+                    "key": f"factsheet:{question_key}",
+                    "content": content
+                })
+            )
         except Exception as e:
-            logger.error(f"Error storing update in Redis: {str(e)}", exc_info=True)
+            logger.error(f"Error storing update: {e}")
             raise
 
     async def get_job_updates(self, job_id: str, cursor: int = 0) -> List[Dict]:
@@ -346,87 +339,29 @@ class FactsheetService:
 
     async def subscribe_to_updates(self, job_id: str) -> AsyncGenerator[Dict[str, Any], None]:
         """Subscribe to Redis updates for a job."""
-        pubsub = None
         try:
-            # First check if there are any existing updates
-            key = f"factsheet:updates:{job_id}"
-            try:
-                # Test Redis connection
-                await self.redis.ping()
-            except Exception as e:
-                logger.error(f"Redis connection error: {e}")
-                yield {
-                    "type": "error",
-                    "message": "Failed to connect to Redis"
-                }
-                return
-
-            # Get existing updates
-            updates = await self.redis.get(key)
-            if updates:
-                updates = json.loads(updates)
-                for update in updates:
-                    yield {
-                        "type": "update",
-                        "content": update["content"],
-                        "key": update["key"]
-                    }
-
-            # Then subscribe to new updates
+            logger.info(f"Setting up Redis subscription for job {job_id}")
             pubsub = self.redis.pubsub()
             channel = f"factsheet:{job_id}"
-            await pubsub.subscribe(channel)
-            logger.info(f"Subscribed to Redis channel: {channel}")
             
-            # Keep checking for messages until we get a complete or error
-            consecutive_empty = 0
-            while True:
-                try:
-                    # Use a longer timeout for better stability
-                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                    
-                    if message and message["type"] == "message":
-                        consecutive_empty = 0
-                        data = json.loads(message["data"])
-                        yield data
-                        
-                        if data.get("type") in ["complete", "error"]:
-                            break
-                    else:
-                        consecutive_empty += 1
-                        # Only sleep if we've had multiple empty messages
-                        if consecutive_empty > 5:
-                            await asyncio.sleep(0.5)
-                        
-                except redis.ConnectionError as e:
-                    logger.error(f"Redis connection lost: {e}")
-                    # Try to reconnect
-                    try:
-                        await pubsub.close()
-                        pubsub = self.redis.pubsub()
-                        await pubsub.subscribe(channel)
-                        logger.info("Redis connection restored")
-                        consecutive_empty = 0
-                    except Exception as e:
-                        logger.error(f"Redis reconnection failed: {e}")
-                        yield {
-                            "type": "error",
-                            "message": "Lost connection to Redis"
-                        }
-                        break
+            await pubsub.subscribe(channel)
+            logger.info(f"Subscribed to channel: {channel}")
+            
+            try:
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        try:
+                            data = json.loads(message["data"])
+                            logger.info(f"Received Redis message for job {job_id}: {data}")
+                            yield data
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Error decoding message: {e}, raw: {message['data']}")
+                            continue
+            finally:
+                logger.info(f"Unsubscribing from channel: {channel}")
+                await pubsub.unsubscribe(channel)
+                await pubsub.close()
                 
-                except Exception as e:
-                    logger.error(f"Error in Redis subscription: {e}")
-                    yield {
-                        "type": "error",
-                        "message": f"Subscription error: {str(e)}"
-                    }
-                    break
-                    
-        finally:
-            if pubsub:
-                try:
-                    await pubsub.unsubscribe()
-                    await pubsub.close()
-                except:
-                    pass
+        except Exception as e:
+            logger.error(f"Error in Redis subscription: {e}")
+            raise
