@@ -45,7 +45,7 @@ class ProcessingStatus(Enum):
     FAILED = "failed"       # Failed during processing
 
 class RAGProcessor:
-    DEFAULT_MODEL = "BAAI/bge-m3"
+    DEFAULT_MODEL = "BAAI/bge-small-en"  # Changed from "BAAI/bge-m3" to reduce memory usage
     OLLAMA_BASE_URL = "http://localhost:11434"
     LLM_MODEL = "llama3.1:8b"  # Using llama3.1 8B model
     
@@ -498,6 +498,12 @@ class RAGProcessor:
                 ProcessingStatus.RUNNING,
                 ProcessingStep.CONVERSION
             )
+            
+            # Delete existing citations for this source
+            try:
+                self.supabase.table('citations').delete().eq('source_id', source_id).execute()
+            except Exception as e:
+                raise ValidationError(f"Failed to clean up existing citations: {str(e)}")
             
             # Split the text into chunks
             chunks = self.split_text(markdown_content)

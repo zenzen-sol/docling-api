@@ -86,9 +86,9 @@ async def generate_answers(
                         full_answer += current_chunk
 
                     # Store update in Redis
-                    logger.info(
-                        f"Storing update for {question_key}, length: {len(full_answer)}"
-                    )
+                    # logger.info(
+                    #     f"Storing update for {question_key}, length: {len(full_answer)}"
+                    # )
                     await service.store_update(job_id, question_key, full_answer)
 
             # Store final answer in Supabase
@@ -154,7 +154,6 @@ async def generate_factsheet(
 
 @router.get("/updates")
 async def get_updates(
-    contract_id: str,
     job_id: str,
     cursor: int = 0,
     service: FactsheetService = Depends(get_factsheet_service),

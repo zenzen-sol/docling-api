@@ -176,7 +176,7 @@ class FactsheetService:
         """Store a streaming update in Redis."""
         try:
             key = f"factsheet:updates:{job_id}"
-            logger.info(f"Storing update in Redis for key: {key}")
+            # logger.info(f"Storing update in Redis for key: {key}")
 
             # Get existing updates
             updates = await self.redis.get(key)
@@ -187,7 +187,7 @@ class FactsheetService:
 
             # Add new update
             updates.append({"key": question_key, "content": content})
-            logger.info(f"Total updates for job {job_id}: {len(updates)}")
+            # logger.info(f"Total updates for job {job_id}: {len(updates)}")
 
             # Store with 1-hour TTL
             await self.redis.setex(key, 3600, json.dumps(updates))
