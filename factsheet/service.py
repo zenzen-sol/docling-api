@@ -12,6 +12,7 @@ from postgrest import APIError
 import os
 import redis.asyncio as redis
 import json
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +23,25 @@ class FactsheetService:
         self.supabase = supabase
         self.rag_processor = rag_processor
         # Initialize Redis client using the same connection as Celery
+        redis_url = os.environ.get("REDIS_HOST", "redis://localhost:6379/0")
         self.redis = redis.from_url(
-            os.environ.get("REDIS_HOST", "redis://localhost:6379/0")
+            redis_url,
+            socket_timeout=5.0,
+            socket_connect_timeout=5.0,
+            retry_on_timeout=True,
+            health_check_interval=30,
+            max_connections=10,
+            decode_responses=True
         )
+        logger.info(f"Initialized Redis connection to {redis_url}")
 
     async def cleanup(self):
         """Cleanup resources."""
-        # No cleanup needed
+        try:
+            await self.redis.close()
+            logger.info("Redis connection closed")
+        except Exception as e:
+            logger.error(f"Error closing Redis connection: {e}")
 
     async def verify_contract_access(self, contract_id: str, user_id: str) -> bool:
         """Verify that the user has access to the specified contract."""
@@ -247,3 +260,160 @@ class FactsheetService:
         except Exception as e:
             logger.error(f"Error generating answer: {str(e)}", exc_info=True)
             raise
+
+    async def generate_answer_stream(
+        self,
+        contract_id: str,
+        question_key: str,
+        job_id: str,
+    ) -> AsyncGenerator[str, None]:
+        """Generate streaming answer for a question."""
+        try:
+            question = FACTSHEET_QUESTIONS[question_key]
+            context = await self.get_relevant_context(contract_id, question)
+            
+            async for chunk in self.rag_processor.stream_generate(question, context):
+                # Publish chunk to Redis
+                await self.redis.publish(
+                    f"factsheet:{job_id}",
+                    json.dumps({
+                        "type": "update",
+                        "key": f"{job_id}:{question_key}",
+                        "content": chunk
+                    })
+                )
+                yield chunk
+                
+            # Signal completion for this question
+            await self.redis.publish(
+                f"factsheet:{job_id}",
+                json.dumps({
+                    "type": "question_complete",
+                    "key": f"{job_id}:{question_key}"
+                })
+            )
+            
+        except Exception as e:
+            logger.error(f"Error generating answer for {question_key}: {e}")
+            await self.redis.publish(
+                f"factsheet:{job_id}",
+                json.dumps({
+                    "type": "error",
+                    "key": f"{job_id}:{question_key}",
+                    "message": str(e)
+                })
+            )
+            raise
+
+    async def generate_answers_stream(
+        self,
+        contract_id: str,
+        question_keys: List[str],
+        job_id: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Generate streaming answers for multiple questions."""
+        try:
+            for question_key in question_keys:
+                async for chunk in self.generate_answer_stream(
+                    contract_id=contract_id,
+                    question_key=question_key,
+                    job_id=job_id,
+                ):
+                    yield {
+                        "question_key": question_key,
+                        "chunk": chunk,
+                    }
+
+            # Signal overall completion
+            await self.redis.publish(
+                f"factsheet:{job_id}",
+                json.dumps({
+                    "type": "complete",
+                    "message": "All questions completed"
+                })
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in answer generation stream: {e}")
+            await self.redis.publish(
+                f"factsheet:{job_id}",
+                json.dumps({
+                    "type": "error",
+                    "message": f"Generation failed: {str(e)}"
+                })
+            )
+            raise
+
+    async def subscribe_to_updates(self, job_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        """Subscribe to Redis updates for a job."""
+        pubsub = None
+        try:
+            # First check if there are any existing updates
+            key = f"factsheet:updates:{job_id}"
+            try:
+                # Test Redis connection
+                await self.redis.ping()
+            except Exception as e:
+                logger.error(f"Redis connection error: {e}")
+                yield {
+                    "type": "error",
+                    "message": "Failed to connect to Redis"
+                }
+                return
+
+            # Get existing updates
+            updates = await self.redis.get(key)
+            if updates:
+                updates = json.loads(updates)
+                for update in updates:
+                    yield {
+                        "type": "update",
+                        "content": update["content"],
+                        "key": update["key"]
+                    }
+
+            # Then subscribe to new updates
+            pubsub = self.redis.pubsub()
+            channel = f"factsheet:{job_id}"
+            await pubsub.subscribe(channel)
+            logger.info(f"Subscribed to Redis channel: {channel}")
+            
+            # Keep checking for messages until we get a complete or error
+            while True:
+                try:
+                    # Use a shorter timeout to keep the connection alive
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
+                    if message and message["type"] == "message":
+                        data = json.loads(message["data"])
+                        yield data
+                        
+                        if data.get("type") in ["complete", "error"]:
+                            break
+                    
+                    # Add a small delay to prevent tight loop
+                    await asyncio.sleep(0.1)
+                        
+                except redis.ConnectionError as e:
+                    logger.error(f"Redis connection lost: {e}")
+                    yield {
+                        "type": "error",
+                        "message": "Lost connection to Redis"
+                    }
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing message: {e}")
+                    continue
+                            
+        except Exception as e:
+            logger.error(f"Error in update subscription: {e}")
+            yield {
+                "type": "error",
+                "message": f"Subscription error: {str(e)}"
+            }
+        finally:
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe()
+                    await pubsub.close()
+                except Exception as e:
+                    logger.error(f"Error closing pubsub: {e}")

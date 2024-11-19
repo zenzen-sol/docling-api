@@ -1,11 +1,20 @@
 from typing import AsyncGenerator, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Header,
+    BackgroundTasks,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import JSONResponse
 import json
 import logging
 from datetime import datetime
 import jwt
 import asyncio
+import uuid
 
 from document_converter.rag_processor import RAGProcessor
 from shared.dependencies import get_rag_processor, get_supabase_client
@@ -16,6 +25,7 @@ from .schema import (
     GenerateFactsheetRequest,
 )
 from .service import FactsheetService
+from .websocket import manager
 
 router = APIRouter(prefix="/contracts/{contract_id}/factsheet")
 logger = logging.getLogger(__name__)
@@ -110,6 +120,83 @@ async def generate_answers(
         ).eq("id", job_id).execute()
 
 
+@router.websocket("/stream")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    contract_id: str,
+    job_id: str,
+    service: FactsheetService = Depends(get_factsheet_service),
+):
+    """WebSocket endpoint for streaming factsheet updates."""
+    try:
+        # Accept the connection
+        await websocket.accept()
+        logger.info(f"WebSocket connected for job {job_id}")
+
+        # Wait for authentication
+        auth_message = await websocket.receive_json()
+        if not isinstance(auth_message, dict) or 'token' not in auth_message or auth_message.get('type') != 'auth':
+            logger.error("Invalid auth message format")
+            await websocket.send_json({"type": "error", "message": "Invalid authentication format"})
+            await websocket.close()
+            return
+            
+        token = auth_message['token']
+        
+        # Verify token and access
+        try:
+            user_id = await get_user_id(f"Bearer {token}")
+            if not await service.verify_contract_access(contract_id, user_id):
+                logger.error(f"User {user_id} not authorized for contract {contract_id}")
+                await websocket.send_json({"type": "error", "message": "Not authorized"})
+                await websocket.close()
+                return
+        except Exception as e:
+            logger.error(f"Authentication failed: {e}")
+            await websocket.send_json({"type": "error", "message": "Authentication failed"})
+            await websocket.close()
+            return
+
+        # Send auth success
+        await websocket.send_json({"type": "auth_success"})
+        logger.info(f"WebSocket authenticated for job {job_id}")
+
+        # Start streaming updates
+        try:
+            async for update in service.subscribe_to_updates(job_id):
+                try:
+                    await websocket.send_json(update)
+                    if update.get("type") in ["complete", "error"]:
+                        break
+                except Exception as e:
+                    logger.error(f"Error sending update: {e}")
+                    break
+
+        except Exception as e:
+            logger.error(f"Error in update stream: {e}")
+            await websocket.send_json({
+                "type": "error",
+                "message": "Error streaming updates"
+            })
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for job {job_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for job {job_id}: {e}")
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Internal server error"
+            })
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
+
+
 @router.post("/generate")
 async def generate_factsheet(
     contract_id: str,
@@ -117,38 +204,33 @@ async def generate_factsheet(
     background_tasks: BackgroundTasks,
     service: FactsheetService = Depends(get_factsheet_service),
     user_id: str = Depends(get_current_user_id),
-):
-    """Start factsheet generation in background."""
+) -> Dict[str, Any]:
+    """Start factsheet generation and return connection info."""
     try:
-        job_id = request.job_id
-        question_keys = request.question_keys
+        # Verify access
+        if not await service.verify_contract_access(contract_id, user_id):
+            raise HTTPException(status_code=403, detail="Not authorized")
 
-        logger.info(f"Starting generation for job_id: {job_id}")
-
-        # Create factsheet first
-        factsheet_id = await service.create_factsheet(contract_id, user_id)
-        logger.info(f"Created factsheet with ID: {factsheet_id}")
+        # Create factsheet record
+        factsheet_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
 
         # Start generation in background
         background_tasks.add_task(
-            generate_answers,
-            service,
-            contract_id,
-            question_keys,
-            job_id,
-            user_id,
-            factsheet_id,
+            service.generate_answers_stream,
+            contract_id=contract_id,
+            question_keys=request.question_keys,
+            job_id=job_id,
         )
 
-        response_data = {
-            "id": job_id,
-            "factsheet_id": factsheet_id,
+        return {
             "status": "processing",
+            "job_id": job_id,
+            "factsheet_id": factsheet_id,
         }
-        logger.info(f"Returning response: {response_data}")
-        return JSONResponse(response_data)
+
     except Exception as e:
-        logger.error(f"Error starting generation: {str(e)}", exc_info=True)
+        logger.error(f"Failed to start generation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
