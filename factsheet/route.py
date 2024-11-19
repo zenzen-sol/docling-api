@@ -18,6 +18,7 @@ import uuid
 
 from document_converter.rag_processor import RAGProcessor
 from shared.dependencies import get_rag_processor, get_supabase_client
+from supabase.client import Client
 from .schema import (
     FactsheetRequest,
     StreamingFactsheetResponse,
@@ -33,10 +34,10 @@ logger = logging.getLogger(__name__)
 
 def get_factsheet_service(
     rag_processor: RAGProcessor = Depends(get_rag_processor),
-    supabase=Depends(get_supabase_client),
+    supabase_client: Client = Depends(get_supabase_client),
 ) -> FactsheetService:
     """Dependency to get the FactsheetService instance."""
-    return FactsheetService(supabase, rag_processor)
+    return FactsheetService(supabase_client, rag_processor)
 
 
 async def get_user_id(
@@ -199,33 +200,47 @@ async def websocket_endpoint(
 
 @router.post("/generate")
 async def generate_factsheet(
-    contract_id: str,
     request: GenerateFactsheetRequest,
+    contract_id: str,
     background_tasks: BackgroundTasks,
+    token: str = Depends(get_current_user_id),
     service: FactsheetService = Depends(get_factsheet_service),
-    user_id: str = Depends(get_current_user_id),
-) -> Dict[str, Any]:
+):
     """Start factsheet generation and return connection info."""
     try:
         # Verify access
-        if not await service.verify_contract_access(contract_id, user_id):
+        if not await service.verify_contract_access(contract_id, token):
             raise HTTPException(status_code=403, detail="Not authorized")
 
         # Create factsheet record
-        factsheet_id = str(uuid.uuid4())
-        job_id = str(uuid.uuid4())
+        factsheet_id = await service.create_factsheet(contract_id, token)
+
+        # Store the WebSocket token in Redis with expiry
+        ws_data = {
+            "job_id": request.job_id,
+            "contract_id": contract_id,
+            "user_id": token
+        }
+        await manager.redis.setex(
+            f"ws_token:{request.ws_token}",
+            300,  # 5 minute expiry
+            json.dumps(ws_data)
+        )
 
         # Start generation in background
         background_tasks.add_task(
-            service.generate_answers_stream,
+            generate_answers,  
+            service=service,
             contract_id=contract_id,
             question_keys=request.question_keys,
-            job_id=job_id,
+            job_id=request.job_id,
+            user_id=token,
+            factsheet_id=factsheet_id,
         )
 
         return {
             "status": "processing",
-            "job_id": job_id,
+            "job_id": request.job_id,
             "factsheet_id": factsheet_id,
         }
 

@@ -30,6 +30,7 @@ class Factsheet(BaseModel):
 class GenerateFactsheetRequest(BaseModel):
     question_keys: List[str]
     job_id: str
+    ws_token: str
 
 
 # Predefined questions and prompts

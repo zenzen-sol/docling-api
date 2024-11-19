@@ -4,6 +4,7 @@ import logging
 import json
 from datetime import datetime
 import jwt
+import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +12,8 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, Set[WebSocket]] = {}
         self.authenticated_jobs: set[str] = set()
-        
+        self.redis = redis.from_url("redis://localhost")
+
     async def connect(self, job_id: str, websocket: WebSocket):
         """Store a new WebSocket connection."""
         # Clean up any existing connection first
@@ -21,56 +23,51 @@ class ConnectionManager:
             self.active_connections[job_id] = set()
         self.active_connections[job_id].add(websocket)
         logger.info(f"WebSocket connected for job {job_id}")
-        
+
     async def authenticate(self, websocket: WebSocket, token: str, contract_id: str, job_id: str) -> bool:
-        """Authenticate a WebSocket connection."""
+        """Authenticate a WebSocket connection using a single-use token."""
         try:
-            # Parse and validate the auth message
-            if not token:
+            # Get the token from Redis
+            stored_data = await self.redis.get(f"ws_token:{token}")
+            if not stored_data:
                 await websocket.send_json({
                     "type": "error",
-                    "message": "No authentication token provided"
+                    "message": "Invalid or expired token"
                 })
                 return False
 
-            # Verify the token and get user_id
-            user_id = await self.verify_token(token)
-            if not user_id:
+            # Parse the stored data
+            stored_data = json.loads(stored_data)
+
+            # Verify the token matches the job and contract
+            if stored_data["job_id"] != job_id or stored_data["contract_id"] != contract_id:
                 await websocket.send_json({
                     "type": "error",
-                    "message": "Invalid authentication token"
+                    "message": "Token mismatch"
                 })
                 return False
 
-            # Verify contract access
-            if not await self.verify_contract_access(contract_id, user_id):
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "No access to contract"
-                })
-                return False
+            # Delete the token since it's single-use
+            await self.redis.delete(f"ws_token:{token}")
 
-            # Add to authenticated connections
+            # Add to active connections
             if job_id not in self.active_connections:
                 self.active_connections[job_id] = set()
             self.active_connections[job_id].add(websocket)
-            self.authenticated_jobs.add(job_id)
-            
-            # Send auth success message
+
             await websocket.send_json({"type": "auth_success"})
             logger.info(f"WebSocket authenticated for job {job_id}")
-            
             return True
-            
+
         except Exception as e:
             logger.error(f"Error during WebSocket authentication for job {job_id}: {e}")
             try:
                 await websocket.send_json({
                     "type": "error",
-                    "message": "Authentication error"
+                    "message": "Authentication failed"
                 })
-            except Exception as close_error:
-                logger.error(f"Error sending auth error for job {job_id}: {close_error}")
+            except:
+                pass
             return False
 
     async def disconnect(self, websocket: WebSocket, job_id: str):
@@ -80,15 +77,15 @@ class ConnectionManager:
                 if websocket in self.active_connections[job_id]:
                     self.active_connections[job_id].remove(websocket)
                     self.authenticated_jobs.discard(job_id)
-                    
+
                     try:
                         await websocket.close(code=1000, reason="Normal closure")
                     except Exception as e:
                         logger.error(f"Error closing WebSocket for job {job_id}: {e}")
-                
+
                 if not self.active_connections[job_id]:
                     del self.active_connections[job_id]
-                    
+
             logger.info(f"WebSocket disconnected for job {job_id}")
         except Exception as e:
             logger.error(f"Error during WebSocket disconnect for job {job_id}: {e}")
@@ -98,7 +95,7 @@ class ConnectionManager:
         if job_id not in self.authenticated_jobs:
             logger.error(f"Attempted to send update to unauthenticated job {job_id}")
             return
-            
+
         if job_id in self.active_connections:
             for websocket in self.active_connections[job_id]:
                 try:
@@ -109,15 +106,15 @@ class ConnectionManager:
                 except Exception as e:
                     logger.error(f"Error sending update for job {job_id}: {e}")
                     await self.disconnect(websocket, job_id)
-                
+
     def is_authenticated(self, job_id: str) -> bool:
         """Check if a job is authenticated."""
         return job_id in self.authenticated_jobs
-        
+
     def get_connection(self, job_id: str) -> Set[WebSocket] | None:
         """Get the WebSocket connection for a job if it exists."""
         return self.active_connections.get(job_id)
-    
+
     async def close_all(self):
         """Close all active connections."""
         for job_id in list(self.active_connections.keys()):
@@ -136,7 +133,7 @@ class ConnectionManager:
                 except Exception as e:
                     logger.error(f"Error broadcasting to job {job_id}: {e}")
                     disconnected.append((websocket, job_id))
-                
+
         # Clean up disconnected clients
         for websocket, job_id in disconnected:
             await self.disconnect(websocket, job_id)
