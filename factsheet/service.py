@@ -185,20 +185,21 @@ class FactsheetService:
             else:
                 raise  # Re-raise if it's not a unique violation
 
-    async def store_update(self, job_id: str, question_key: str, content: str) -> None:
-        """Store a streaming update in Redis."""
+    async def store_update(self, job_id: str, question_key: str, content: str):
+        """Store an update in Redis."""
         try:
-            logger.info(f"Storing update for job {job_id}, question {question_key}")
+            logger.info(f"Publishing chunk for {job_id}, question {question_key}, length: {len(content)}")
+            # Only publish the new chunk
             await self.redis.publish(
                 f"factsheet:{job_id}",
                 json.dumps({
                     "type": "update",
                     "key": f"factsheet:{question_key}",
-                    "content": content
+                    "content": content,
                 })
             )
         except Exception as e:
-            logger.error(f"Error storing update: {e}")
+            logger.error(f"Error publishing update: {e}")
             raise
 
     async def get_job_updates(self, job_id: str, cursor: int = 0) -> List[Dict]:
@@ -337,8 +338,8 @@ class FactsheetService:
             )
             raise
 
-    async def subscribe_to_updates(self, job_id: str) -> AsyncGenerator[Dict[str, Any], None]:
-        """Subscribe to Redis updates for a job."""
+    async def subscribe_to_updates(self, job_id: str):
+        """Subscribe to updates for a specific job."""
         try:
             logger.info(f"Setting up Redis subscription for job {job_id}")
             pubsub = self.redis.pubsub()
@@ -352,7 +353,7 @@ class FactsheetService:
                     if message["type"] == "message":
                         try:
                             data = json.loads(message["data"])
-                            logger.info(f"Received Redis message for job {job_id}: {data}")
+                            logger.info(f"Received Redis message: {data.get('type')}, key: {data.get('key')}, content length: {len(data.get('content', ''))} chars")
                             yield data
                         except json.JSONDecodeError as e:
                             logger.error(f"Error decoding message: {e}, raw: {message['data']}")
