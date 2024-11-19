@@ -144,23 +144,9 @@ async def websocket_endpoint(
             
         token = auth_message['token']
         
-        # Verify token and access
-        try:
-            user_id = await get_user_id(f"Bearer {token}")
-            if not await service.verify_contract_access(contract_id, user_id):
-                logger.error(f"User {user_id} not authorized for contract {contract_id}")
-                await websocket.send_json({"type": "error", "message": "Not authorized"})
-                await websocket.close()
-                return
-        except Exception as e:
-            logger.error(f"Authentication failed: {e}")
-            await websocket.send_json({"type": "error", "message": "Authentication failed"})
-            await websocket.close()
+        # Verify token using the manager
+        if not await manager.authenticate(websocket, token, contract_id, job_id):
             return
-
-        # Send auth success
-        await websocket.send_json({"type": "auth_success"})
-        logger.info(f"WebSocket authenticated for job {job_id}")
 
         # Start streaming updates
         try:
@@ -182,6 +168,7 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for job {job_id}")
+        await manager.disconnect(websocket, job_id)
     except Exception as e:
         logger.error(f"WebSocket error for job {job_id}: {e}")
         try:
