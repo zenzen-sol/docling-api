@@ -157,7 +157,7 @@ async def websocket_endpoint(
             service.supabase.from_("contracts")
             .select("id")
             .eq("id", contract_id)
-            .eq("user_id", user_id)
+            .eq("owner_id", user_id)
             .single()
             .execute()
         )

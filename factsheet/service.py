@@ -379,41 +379,54 @@ class FactsheetService:
             logger.info(f"Subscribed to Redis channel: {channel}")
             
             # Keep checking for messages until we get a complete or error
+            consecutive_empty = 0
             while True:
                 try:
-                    # Use a shorter timeout to keep the connection alive
-                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
+                    # Use a longer timeout for better stability
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    
                     if message and message["type"] == "message":
+                        consecutive_empty = 0
                         data = json.loads(message["data"])
                         yield data
                         
                         if data.get("type") in ["complete", "error"]:
                             break
-                    
-                    # Add a small delay to prevent tight loop
-                    await asyncio.sleep(0.1)
+                    else:
+                        consecutive_empty += 1
+                        # Only sleep if we've had multiple empty messages
+                        if consecutive_empty > 5:
+                            await asyncio.sleep(0.5)
                         
                 except redis.ConnectionError as e:
                     logger.error(f"Redis connection lost: {e}")
+                    # Try to reconnect
+                    try:
+                        await pubsub.close()
+                        pubsub = self.redis.pubsub()
+                        await pubsub.subscribe(channel)
+                        logger.info("Redis connection restored")
+                        consecutive_empty = 0
+                    except Exception as e:
+                        logger.error(f"Redis reconnection failed: {e}")
+                        yield {
+                            "type": "error",
+                            "message": "Lost connection to Redis"
+                        }
+                        break
+                
+                except Exception as e:
+                    logger.error(f"Error in Redis subscription: {e}")
                     yield {
                         "type": "error",
-                        "message": "Lost connection to Redis"
+                        "message": f"Subscription error: {str(e)}"
                     }
                     break
-                except Exception as e:
-                    logger.error(f"Error processing message: {e}")
-                    continue
-                            
-        except Exception as e:
-            logger.error(f"Error in update subscription: {e}")
-            yield {
-                "type": "error",
-                "message": f"Subscription error: {str(e)}"
-            }
+                    
         finally:
             if pubsub:
                 try:
                     await pubsub.unsubscribe()
                     await pubsub.close()
-                except Exception as e:
-                    logger.error(f"Error closing pubsub: {e}")
+                except:
+                    pass
