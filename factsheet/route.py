@@ -20,6 +20,7 @@ from .schema import (
     GenerateFactsheetRequest,
 )
 from .service import FactsheetService
+from .websocket import manager
 
 router = APIRouter(prefix="/contracts/{contract_id}/factsheet")
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ async def generate_answers(
 ):
     """Generate answers in background and store updates in Redis."""
     try:
+        await service.initialize()  # Initialize Redis connection
         logger.info(
             f"Starting answer generation for job {job_id}, factsheet {factsheet_id}"
         )
@@ -84,9 +86,9 @@ async def generate_answers(
                 current_chunk = response.answers[question_key]
                 if len(current_chunk) > 0:
                     # Store only the new chunk in Redis
-                    logger.info(
-                        f"Publishing chunk for {question_key}, length: {len(current_chunk)}"
-                    )
+                    # logger.info(
+                    #     f"Publishing chunk for {question_key}, length: {len(current_chunk)}"
+                    # )
                     await service.store_update(job_id, question_key, current_chunk)
                     # Accumulate locally for final storage
                     if not full_answer:
@@ -118,6 +120,8 @@ async def generate_answers(
         service.supabase.table("factsheet_jobs").update(
             {"status": "error", "error": str(e)}
         ).eq("id", job_id).execute()
+    finally:
+        await service.cleanup()
 
 
 @router.websocket("/stream")
@@ -130,9 +134,14 @@ async def websocket_endpoint(
 ):
     """WebSocket endpoint for streaming factsheet updates."""
     try:
+        # Initialize Redis connection first
+        await service.initialize()
+        
         # Accept the connection
         await websocket.accept()
-        logger.info(f"WebSocket connected for job {job_id}")
+        
+        # Add to connection manager
+        await manager.connect(job_id, websocket)
 
         # Verify API key and get user_id
         result = (
@@ -146,7 +155,6 @@ async def websocket_endpoint(
         if not result.data:
             logger.error("Invalid API key")
             await websocket.send_json({"type": "error", "message": "Invalid API key"})
-            await websocket.close()
             return
 
         user_id = result.data["id"]
@@ -164,49 +172,32 @@ async def websocket_endpoint(
         if not access_result.data:
             logger.error(f"User {user_id} not authorized for contract {contract_id}")
             await websocket.send_json({"type": "error", "message": "Not authorized"})
-            await websocket.close()
             return
 
         # Send connected message
         await websocket.send_json({"type": "connected"})
         logger.info(f"Starting Redis subscription for job {job_id}")
 
-        # Start streaming updates
-        try:
-            async for update in service.subscribe_to_updates(job_id):
-                try:
-                    logger.info(f"Sending update for job {job_id}: {update}")
-                    await websocket.send_json(update)
-                    if update.get("type") in ["complete", "error"]:
-                        logger.info(
-                            f"Received {update['type']} message, closing connection"
-                        )
-                        break
-                except Exception as e:
-                    logger.error(f"Error sending update: {e}")
-                    break
+        async for update in service.subscribe_to_updates(job_id):
+            # logger.info(f"Sending update for job {job_id}: {update}")
+            await websocket.send_json(update)
 
-        except Exception as e:
-            logger.error(f"Error in update stream: {e}")
-            await websocket.send_json(
-                {"type": "error", "message": "Error streaming updates"}
-            )
+            if update.get("type") == "complete":
+                logger.info("Received complete message, closing connection")
+                break
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for job {job_id}")
+        await manager.disconnect(websocket, job_id)
+        await service.cleanup()
     except Exception as e:
         logger.error(f"WebSocket error for job {job_id}: {e}")
-        try:
-            await websocket.send_json(
-                {"type": "error", "message": "Internal server error"}
-            )
-        except:
-            pass
+        await manager.disconnect(websocket, job_id)
+        await service.cleanup()
+        raise
     finally:
-        try:
-            await websocket.close()
-        except:
-            pass
+        await manager.disconnect(websocket, job_id)
+        await service.cleanup()
 
 
 @router.post("/generate")

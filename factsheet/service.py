@@ -9,35 +9,52 @@ from postgrest import APIError
 import os
 import redis.asyncio as redis
 import json
+import asyncio
 
 logger = logging.getLogger(__name__)
 
 
 class FactsheetService:
+    _redis_client = None
+
+    @classmethod
+    async def get_redis(cls):
+        if cls._redis_client is None:
+            redis_url = os.environ.get("REDIS_HOST", "redis://localhost:6379/0")
+            cls._redis_client = redis.from_url(
+                redis_url,
+                socket_timeout=5.0,
+                socket_connect_timeout=5.0,
+                retry_on_timeout=True,
+                health_check_interval=30,
+                max_connections=10,
+                decode_responses=True,
+            )
+            logger.info(f"Initialized Redis connection to {redis_url}")
+        return cls._redis_client
+
     def __init__(self, supabase: Client, rag_processor: RAGProcessor):
         """Initialize the factsheet service."""
         self.supabase = supabase
         self.rag_processor = rag_processor
-        # Initialize Redis client using the same connection as Celery
-        redis_url = os.environ.get("REDIS_HOST", "redis://localhost:6379/0")
-        self.redis = redis.from_url(
-            redis_url,
-            socket_timeout=5.0,
-            socket_connect_timeout=5.0,
-            retry_on_timeout=True,
-            health_check_interval=30,
-            max_connections=10,
-            decode_responses=True,
-        )
-        logger.info(f"Initialized Redis connection to {redis_url}")
+        self.redis = None
+
+    async def initialize(self):
+        """Initialize Redis connection."""
+        self.redis = await self.get_redis()
 
     async def cleanup(self):
         """Cleanup resources."""
-        try:
-            await self.redis.close()
-            logger.info("Redis connection closed")
-        except Exception as e:
-            logger.error(f"Error closing Redis connection: {e}")
+        # Only close the class-level Redis client if we're the last service instance
+        if self._redis_client is not None:
+            try:
+                # Give time for any pending unsubscribe operations to complete
+                await asyncio.sleep(0.1)
+                await self._redis_client.close()
+                self._redis_client = None
+                logger.info("Redis connection closed")
+            except Exception as e:
+                logger.error(f"Error closing Redis connection: {e}")
 
     async def verify_contract_access(self, contract_id: str, user_id: str) -> bool:
         """Verify that the user has access to the specified contract."""
@@ -339,6 +356,7 @@ class FactsheetService:
 
     async def subscribe_to_updates(self, job_id: str):
         """Subscribe to updates for a specific job."""
+        pubsub = None
         try:
             logger.info(f"Setting up Redis subscription for job {job_id}")
             pubsub = self.redis.pubsub()
@@ -347,25 +365,28 @@ class FactsheetService:
             await pubsub.subscribe(channel)
             logger.info(f"Subscribed to channel: {channel}")
 
-            try:
-                async for message in pubsub.listen():
-                    if message["type"] == "message":
-                        try:
-                            data = json.loads(message["data"])
-                            logger.info(
-                                f"Received Redis message: {data.get('type')}, key: {data.get('key')}, content length: {len(data.get('content', ''))} chars"
-                            )
-                            yield data
-                        except json.JSONDecodeError as e:
-                            logger.error(
-                                f"Error decoding message: {e}, raw: {message['data']}"
-                            )
-                            continue
-            finally:
-                logger.info(f"Unsubscribing from channel: {channel}")
-                await pubsub.unsubscribe(channel)
-                await pubsub.close()
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    try:
+                        data = json.loads(message["data"])
+                        # logger.info(
+                        #     f"Received Redis message: {data.get('type')}, key: {data.get('key')}, content length: {len(data.get('content', ''))} chars"
+                        # )
+                        yield data
+                    except json.JSONDecodeError as e:
+                        logger.error(
+                            f"Error decoding message: {e}, raw: {message['data']}"
+                        )
+                        continue
 
         except Exception as e:
             logger.error(f"Error in Redis subscription: {e}")
             raise
+        finally:
+            if pubsub is not None:
+                try:
+                    logger.info(f"Cleaning up Redis subscription for job {job_id}")
+                    await pubsub.unsubscribe(f"factsheet:{job_id}")
+                    await pubsub.close()
+                except Exception as e:
+                    logger.error(f"Error cleaning up Redis subscription: {e}")
