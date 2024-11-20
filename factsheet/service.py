@@ -1,10 +1,7 @@
-from typing import AsyncGenerator, Dict, Any, List, Optional
+from typing import AsyncGenerator, Dict, Any, List
 import uuid
 from datetime import datetime
 import logging
-import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
-from contextlib import asynccontextmanager
 from supabase.client import Client
 from document_converter.rag_processor import RAGProcessor
 from .schema import FACTSHEET_QUESTIONS, StreamingFactsheetResponse
@@ -12,7 +9,6 @@ from postgrest import APIError
 import os
 import redis.asyncio as redis
 import json
-import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +27,7 @@ class FactsheetService:
             retry_on_timeout=True,
             health_check_interval=30,
             max_connections=10,
-            decode_responses=True
+            decode_responses=True,
         )
         logger.info(f"Initialized Redis connection to {redis_url}")
 
@@ -188,15 +184,19 @@ class FactsheetService:
     async def store_update(self, job_id: str, question_key: str, content: str):
         """Store an update in Redis."""
         try:
-            logger.info(f"Publishing chunk for {job_id}, question {question_key}, length: {len(content)}")
+            logger.info(
+                f"Publishing chunk for {job_id}, question {question_key}, length: {len(content)}"
+            )
             # Only publish the new chunk
             await self.redis.publish(
                 f"factsheet:{job_id}",
-                json.dumps({
-                    "type": "update",
-                    "key": f"factsheet:{question_key}",
-                    "content": content,
-                })
+                json.dumps(
+                    {
+                        "type": "update",
+                        "key": f"factsheet:{question_key}",
+                        "content": content,
+                    }
+                ),
             )
         except Exception as e:
             logger.error(f"Error publishing update: {e}")
@@ -265,37 +265,40 @@ class FactsheetService:
         try:
             question = FACTSHEET_QUESTIONS[question_key]
             context = await self.get_relevant_context(contract_id, question)
-            
+
             async for chunk in self.rag_processor.stream_generate(question, context):
                 # Publish chunk to Redis
                 await self.redis.publish(
                     f"factsheet:{job_id}",
-                    json.dumps({
-                        "type": "update",
-                        "key": f"{job_id}:{question_key}",
-                        "content": chunk
-                    })
+                    json.dumps(
+                        {
+                            "type": "update",
+                            "key": f"{job_id}:{question_key}",
+                            "content": chunk,
+                        }
+                    ),
                 )
                 yield chunk
-                
+
             # Signal completion for this question
             await self.redis.publish(
                 f"factsheet:{job_id}",
-                json.dumps({
-                    "type": "question_complete",
-                    "key": f"{job_id}:{question_key}"
-                })
+                json.dumps(
+                    {"type": "question_complete", "key": f"{job_id}:{question_key}"}
+                ),
             )
-            
+
         except Exception as e:
             logger.error(f"Error generating answer for {question_key}: {e}")
             await self.redis.publish(
                 f"factsheet:{job_id}",
-                json.dumps({
-                    "type": "error",
-                    "key": f"{job_id}:{question_key}",
-                    "message": str(e)
-                })
+                json.dumps(
+                    {
+                        "type": "error",
+                        "key": f"{job_id}:{question_key}",
+                        "message": str(e),
+                    }
+                ),
             )
             raise
 
@@ -321,20 +324,16 @@ class FactsheetService:
             # Signal overall completion
             await self.redis.publish(
                 f"factsheet:{job_id}",
-                json.dumps({
-                    "type": "complete",
-                    "message": "All questions completed"
-                })
+                json.dumps({"type": "complete", "message": "All questions completed"}),
             )
-            
+
         except Exception as e:
             logger.error(f"Error in answer generation stream: {e}")
             await self.redis.publish(
                 f"factsheet:{job_id}",
-                json.dumps({
-                    "type": "error",
-                    "message": f"Generation failed: {str(e)}"
-                })
+                json.dumps(
+                    {"type": "error", "message": f"Generation failed: {str(e)}"}
+                ),
             )
             raise
 
@@ -344,25 +343,29 @@ class FactsheetService:
             logger.info(f"Setting up Redis subscription for job {job_id}")
             pubsub = self.redis.pubsub()
             channel = f"factsheet:{job_id}"
-            
+
             await pubsub.subscribe(channel)
             logger.info(f"Subscribed to channel: {channel}")
-            
+
             try:
                 async for message in pubsub.listen():
                     if message["type"] == "message":
                         try:
                             data = json.loads(message["data"])
-                            logger.info(f"Received Redis message: {data.get('type')}, key: {data.get('key')}, content length: {len(data.get('content', ''))} chars")
+                            logger.info(
+                                f"Received Redis message: {data.get('type')}, key: {data.get('key')}, content length: {len(data.get('content', ''))} chars"
+                            )
                             yield data
                         except json.JSONDecodeError as e:
-                            logger.error(f"Error decoding message: {e}, raw: {message['data']}")
+                            logger.error(
+                                f"Error decoding message: {e}, raw: {message['data']}"
+                            )
                             continue
             finally:
                 logger.info(f"Unsubscribing from channel: {channel}")
                 await pubsub.unsubscribe(channel)
                 await pubsub.close()
-                
+
         except Exception as e:
             logger.error(f"Error in Redis subscription: {e}")
             raise

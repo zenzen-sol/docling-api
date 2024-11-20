@@ -1,13 +1,8 @@
 from io import BytesIO
-from multiprocessing.pool import AsyncResult
-from typing import List, AsyncGenerator, Optional, Dict, Any
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, Query, Depends
+from typing import List
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Query, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
-import os
-import uuid
 import json
-from datetime import datetime
-from supabase import create_client, Client
 
 from document_converter.schema import (
     BatchConversionJobResult,
@@ -19,7 +14,7 @@ from document_converter.service import (
     DoclingDocumentConversion,
 )
 from document_converter.utils import is_file_format_supported
-from document_converter.rag_processor import RAGProcessor, ProcessingStatus, ProcessingStep
+from document_converter.rag_processor import RAGProcessor, ProcessingStep
 from shared.dependencies import get_rag_processor
 from worker.tasks import convert_document_task, convert_documents_task
 from starlette.datastructures import Headers
@@ -63,8 +58,8 @@ async def convert_single_document(
 
 
 @router.post(
-    "/documents/convert-and-embed",  
-    description="Convert a document and generate embeddings with progress streaming"
+    "/documents/convert-and-embed",
+    description="Convert a document and generate embeddings with progress streaming",
 )
 async def convert_and_embed_document(
     source_id: int = Form(..., description="ID of the source to process"),
@@ -72,74 +67,73 @@ async def convert_and_embed_document(
     image_resolution_scale: int = Form(4, ge=1, le=4),
     rag_processor: RAGProcessor = Depends(get_rag_processor),
 ):
-    print(f"Starting conversion for source_id: {source_id}")  
-    
+    print(f"Starting conversion for source_id: {source_id}")
+
     async def process_stream():
         try:
             # Get source details
-            source = rag_processor.supabase.table('sources').select(
-                '*',
-                count='exact'
-            ).eq('id', source_id).execute()
-            
-            print(f"Source query result: {source}")  
-            
+            source = (
+                rag_processor.supabase.table("sources")
+                .select("*", count="exact")
+                .eq("id", source_id)
+                .execute()
+            )
+
+            print(f"Source query result: {source}")
+
             if not source.data:
                 error = f"Source {source_id} not found"
-                print(f"Error: {error}")  
+                print(f"Error: {error}")
                 raise HTTPException(status_code=404, detail=error)
-                
+
             source_record = source.data[0]
-            print(f"Source record: {source_record}")  
-            
+            print(f"Source record: {source_record}")
+
             # Download file from storage
-            file_path = source_record['file_name']
+            file_path = source_record["file_name"]
             try:
-                print(f"Attempting to download file: {file_path}")  
-                response = rag_processor.supabase.storage.from_('documents').download(file_path)
+                print(f"Attempting to download file: {file_path}")
+                response = rag_processor.supabase.storage.from_("documents").download(
+                    file_path
+                )
                 if not response:
                     error = f"File not found in storage: {file_path}"
-                    print(f"Error: {error}")  
-                    raise HTTPException(
-                        status_code=404,
-                        detail=error
-                    )
-                print(f"File downloaded successfully, size: {len(response)} bytes")  
+                    print(f"Error: {error}")
+                    raise HTTPException(status_code=404, detail=error)
+                print(f"File downloaded successfully, size: {len(response)} bytes")
             except Exception as e:
                 error = f"Failed to download file from storage: {str(e)}"
-                print(f"Error: {error}")  
-                raise HTTPException(
-                    status_code=500,
-                    detail=error
-                )
+                print(f"Error: {error}")
+                raise HTTPException(status_code=500, detail=error)
 
             # Create UploadFile from downloaded content
-            headers = Headers({
-                "content-type": source_record['file_metadata'].get('contentType', 'application/octet-stream')
-            })
-            file = UploadFile(
-                filename=file_path,
-                file=BytesIO(response),
-                headers=headers
+            headers = Headers(
+                {
+                    "content-type": source_record["file_metadata"].get(
+                        "contentType", "application/octet-stream"
+                    )
+                }
             )
-            print(f"Created UploadFile object with filename: {file.filename} and content_type: {file.content_type}")  
+            file = UploadFile(
+                filename=file_path, file=BytesIO(response), headers=headers
+            )
+            print(
+                f"Created UploadFile object with filename: {file.filename} and content_type: {file.content_type}"
+            )
 
             # Convert the document
-            print("Starting document conversion")  
+            print("Starting document conversion")
             conversion_result = await convert_single_document(
-                file, 
-                extract_tables_as_images, 
-                image_resolution_scale
+                file, extract_tables_as_images, image_resolution_scale
             )
-            print("Document conversion completed")  
+            print("Document conversion completed")
 
             # Process the document and yield results
-            print("Starting source processing")  
+            print("Starting source processing")
             async for update in rag_processor.process_source(
-                source_id=source_id,
-                markdown_content=conversion_result.markdown
+                source_id=source_id, markdown_content=conversion_result.markdown
             ):
-                print(f"Processing update: {update}")  
+                print(f"Processing update: {update}")
                 yield json.dumps(update) + "\n"
 
         except Exception as e:
@@ -147,46 +141,49 @@ async def convert_and_embed_document(
                 "type": "error",
                 "message": str(e),
                 "step": ProcessingStep.CONVERSION.value,
-                "source_id": source_id
+                "source_id": source_id,
             }
-            print(f"Error during processing: {error_update}")  
+            print(f"Error during processing: {error_update}")
             yield json.dumps(error_update) + "\n"
             raise HTTPException(status_code=500, detail=str(e))
 
-    return StreamingResponse(
-        process_stream(),
-        media_type="application/x-ndjson"
-    )
+    return StreamingResponse(process_stream(), media_type="application/x-ndjson")
 
 
 @router.get(
-    "/sources/{source_id}/status",
-    description="Get the processing status of a source"
+    "/sources/{source_id}/status", description="Get the processing status of a source"
 )
 async def get_source_status(
-    source_id: int,
-    rag_processor: RAGProcessor = Depends(get_rag_processor)
+    source_id: int, rag_processor: RAGProcessor = Depends(get_rag_processor)
 ):
     try:
         # Get source details
-        source = rag_processor.supabase.table('sources').select(
-            '*',
-            count='exact'
-        ).eq('id', source_id).execute()
-        
+        source = (
+            rag_processor.supabase.table("sources")
+            .select("*", count="exact")
+            .eq("id", source_id)
+            .execute()
+        )
+
         if not source.data:
             raise HTTPException(status_code=404, detail=f"Source {source_id} not found")
-            
+
         # Get latest conversion if any
-        conversion = rag_processor.supabase.table('conversions').select(
-            '*',
-            count='exact'
-        ).eq('source_id', source_id).order('created_at.desc').limit(1).execute()
-        
-        return JSONResponse(content={
-            "source": source.data[0],
-            "conversion": conversion.data[0] if conversion.data else None
-        })
+        conversion = (
+            rag_processor.supabase.table("conversions")
+            .select("*", count="exact")
+            .eq("source_id", source_id)
+            .order("created_at.desc")
+            .limit(1)
+            .execute()
+        )
+
+        return JSONResponse(
+            content={
+                "source": source.data[0],
+                "conversion": conversion.data[0] if conversion.data else None,
+            }
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

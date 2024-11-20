@@ -1,4 +1,3 @@
-from typing import AsyncGenerator, Dict, Any
 from fastapi import (
     APIRouter,
     Depends,
@@ -11,22 +10,16 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 import json
 import logging
-from datetime import datetime
 import jwt
-import asyncio
-import uuid
 
 from document_converter.rag_processor import RAGProcessor
 from shared.dependencies import get_rag_processor, get_supabase_client
 from supabase.client import Client
 from .schema import (
-    FactsheetRequest,
-    StreamingFactsheetResponse,
     FACTSHEET_QUESTIONS,
     GenerateFactsheetRequest,
 )
 from .service import FactsheetService
-from .websocket import manager
 
 router = APIRouter(prefix="/contracts/{contract_id}/factsheet")
 logger = logging.getLogger(__name__)
@@ -91,7 +84,9 @@ async def generate_answers(
                 current_chunk = response.answers[question_key]
                 if len(current_chunk) > 0:
                     # Store only the new chunk in Redis
-                    logger.info(f"Publishing chunk for {question_key}, length: {len(current_chunk)}")
+                    logger.info(
+                        f"Publishing chunk for {question_key}, length: {len(current_chunk)}"
+                    )
                     await service.store_update(job_id, question_key, current_chunk)
                     # Accumulate locally for final storage
                     if not full_answer:
@@ -109,10 +104,7 @@ async def generate_answers(
         logger.info(f"Marking job {job_id} as completed")
         await service.redis.publish(
             f"factsheet:{job_id}",
-            json.dumps({
-                "type": "complete",
-                "message": "All questions completed"
-            })
+            json.dumps({"type": "complete", "message": "All questions completed"}),
         )
         service.supabase.table("factsheet_jobs").update({"status": "completed"}).eq(
             "id", job_id
@@ -121,11 +113,7 @@ async def generate_answers(
     except Exception as e:
         logger.error(f"Error in generation: {str(e)}", exc_info=True)
         await service.redis.publish(
-            f"factsheet:{job_id}",
-            json.dumps({
-                "type": "error",
-                "message": str(e)
-            })
+            f"factsheet:{job_id}", json.dumps({"type": "error", "message": str(e)})
         )
         service.supabase.table("factsheet_jobs").update(
             {"status": "error", "error": str(e)}
@@ -154,15 +142,15 @@ async def websocket_endpoint(
             .single()
             .execute()
         )
-        
+
         if not result.data:
             logger.error("Invalid API key")
             await websocket.send_json({"type": "error", "message": "Invalid API key"})
             await websocket.close()
             return
-            
+
         user_id = result.data["id"]
-        
+
         # Verify contract access
         access_result = (
             service.supabase.from_("contracts")
@@ -172,7 +160,7 @@ async def websocket_endpoint(
             .single()
             .execute()
         )
-        
+
         if not access_result.data:
             logger.error(f"User {user_id} not authorized for contract {contract_id}")
             await websocket.send_json({"type": "error", "message": "Not authorized"})
@@ -190,7 +178,9 @@ async def websocket_endpoint(
                     logger.info(f"Sending update for job {job_id}: {update}")
                     await websocket.send_json(update)
                     if update.get("type") in ["complete", "error"]:
-                        logger.info(f"Received {update['type']} message, closing connection")
+                        logger.info(
+                            f"Received {update['type']} message, closing connection"
+                        )
                         break
                 except Exception as e:
                     logger.error(f"Error sending update: {e}")
@@ -198,20 +188,18 @@ async def websocket_endpoint(
 
         except Exception as e:
             logger.error(f"Error in update stream: {e}")
-            await websocket.send_json({
-                "type": "error",
-                "message": "Error streaming updates"
-            })
+            await websocket.send_json(
+                {"type": "error", "message": "Error streaming updates"}
+            )
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for job {job_id}")
     except Exception as e:
         logger.error(f"WebSocket error for job {job_id}: {e}")
         try:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Internal server error"
-            })
+            await websocket.send_json(
+                {"type": "error", "message": "Internal server error"}
+            )
         except:
             pass
     finally:
@@ -252,12 +240,14 @@ async def generate_factsheet(
         return {
             "job_id": request.job_id,
             "factsheet_id": factsheet_id,
-            "message": "Factsheet generation started"
+            "message": "Factsheet generation started",
         }
 
     except Exception as e:
         logger.error(f"Error starting factsheet generation: {e}")
-        raise HTTPException(status_code=500, detail="Error starting factsheet generation")
+        raise HTTPException(
+            status_code=500, detail="Error starting factsheet generation"
+        )
 
 
 @router.get("/updates")
